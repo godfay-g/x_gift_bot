@@ -5,6 +5,7 @@ X (Twitter) Premium 礼品兑换平台。你生成兑换码发给用户，用户
 - **兑换页**：用户自助兑换，实时显示处理进度
 - **管理后台**：生成/停用兑换码、批次文件夹、统计面板、订单状态
 - **安全**：凭据逐条 AES-256-GCM 加密存储，付款前逐项校验金额与商户，付款确认只提交一次
+- **Premium+（可选）**：商品目录可同时配置 Premium 与 Premium+ 套餐，兑换码绑定档位与时长。Premium+ 的商品 ID、价格和 Stripe 商品名需自行从 x.com 获取，详见 [docs/premium-plus.md](docs/premium-plus.md)
 
 ## 截图
 
@@ -68,7 +69,7 @@ go build -tags with_quic,with_utls -o bin/xgift-web ./cmd/xgift-web
 3. **支付卡** — 输入卡信息和账单信息（卡号会自动校验）。想启用多卡轮换，向导完成后用 `xgift cards add` 追加更多卡，缺少的账单字段会自动继承。
 4. **代理** — 选直连、按提示填 AnyTLS 节点，或粘贴 sing-box 配置；保存前会实际启动验证配置是否有效。
 5. **Stripe 公钥** — 粘贴 `pk_live_` 公钥。
-6. **商品目录** — 直接回车使用 X Premium 默认目录（3/6 个月套餐），或自定义商户、币种和套餐。
+6. **商品目录** — 直接回车使用 X Premium 默认目录（3/6 个月套餐），或自定义商户、币种和套餐；之后可选择追加 Premium+ 套餐（无默认值，需自行粘贴 `prod_` ID、金额与 Stripe 商品名，见 [docs/premium-plus.md](docs/premium-plus.md)）。
 7. **站点配置** — 输入你的域名（如 `https://xp.example.com`），向导会生成 `site.env` 和随机的后台管理员密码（只显示一次，同时保存在文件里）。
 
 完成后运行 `./bin/xgift status`，六条记录全部显示 `verified` 即为成功。
@@ -108,7 +109,7 @@ curl https://你的域名/healthz     # {"ok":true,...} 即成功
 
 浏览器打开 `https://你的域名/admin`，输入用户名 `admin` 和向导生成的密码：
 
-1. 在「生成兑换码」选套餐、数量、批次名，点生成，复制或下载兑换码发给用户。
+1. 在「生成兑换码」选套餐（档位 + 时长，来自商品目录）、数量、批次名，点生成，复制或下载兑换码发给用户。
 2. 顶部「统计概览」随时查看兑换进度和成功率。
 3. 用户打开 `https://你的域名`，输入兑换码和 X 用户名即可完成充值。
 
@@ -129,6 +130,8 @@ echo '新的ct0等JSON' | ./bin/xgift put --name cookies      # 还有 card / ca
 echo 'pk_live_新公钥' | ./bin/xgift put --name stripe-key
 echo '{"merchant":"acct_...","currency":"bdt","plans":[...]}' | ./bin/xgift put --name catalog
 ```
+
+商品目录中每个套餐可设置 `tier`（`premium` 默认 / `premium_plus`），`premium_plus` 套餐必须提供 `name`（Stripe 结账页的精确商品名）。最多 4 个套餐，档位+时长不可重复。示例与迁移说明见 [docs/premium-plus.md](docs/premium-plus.md)。
 
 付款卡按「卡 × 节点」组合随机轮换：每 3 个连续订单使用同一组合；任意订单被拒后立即换组合，被拒的那张卡进入 30 分钟冷却（其他卡继续轮换），补单也走同一逻辑。支付方明确 `do_not_try_again` 时该卡永久封锁直到显式解除。`cards add` 追加或更新（同卡号替换），`cards remove --last4 1234` 移除，`cards rotate` 立即结束当前组合，`cards unblock` 清除冷却与永久封锁。
 
