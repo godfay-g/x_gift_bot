@@ -15,6 +15,7 @@ import {
 import { adminApi } from "./adminApi";
 import { codeStatus } from "./codeStatus";
 import PersonSearchRounded from "@mui/icons-material/PersonSearchRounded";
+import { giftLabel } from "./tier";
 
 type Detail = {
   order: {
@@ -22,6 +23,7 @@ type Detail = {
     username: string;
     hint: string;
     months: number;
+    tier?: string;
     status: string;
     message: string;
     batch: string;
@@ -168,7 +170,7 @@ export function CustomerPanel({
           {detail && (
             <Stack spacing={2}>
               <Typography>
-                {detail.order.months} 个月 · {detail.order.batch || "未分类"} ·{" "}
+                {giftLabel(detail.order.tier, detail.order.months)} · {detail.order.batch || "未分类"} ·{" "}
                 {codeStatus[detail.order.status]?.label || detail.order.status}
               </Typography>
               {detail.order.message && (

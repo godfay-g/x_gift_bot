@@ -13,6 +13,7 @@ import {
 import ManageSearchRounded from "@mui/icons-material/ManageSearchRounded";
 import { adminApi, formatTime, type AdminCode } from "./adminApi";
 import { codeStatus } from "./codeStatus";
+import { giftLabel } from "./tier";
 
 // Direct lookup by full redemption code: status, batch and recipient without
 // paging through folders. Actions delegate to the parent's existing flows.
@@ -186,7 +187,7 @@ export function LookupPanel({
                 label={codeStatus[result.status]?.label ?? result.status}
               />
               <Typography variant="body2" fontWeight={600}>
-                {result.months} 个月
+                {giftLabel(result.tier, result.months)}
               </Typography>
               <Typography
                 variant="body2"

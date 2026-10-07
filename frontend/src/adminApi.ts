@@ -17,7 +17,7 @@ export type AdminStats = {
 export type AdminStatsDetail = {
   codes: AdminStats & { redeemed: number };
   rates: { redeemed: number; success: number };
-  months: { months: number; total: number; succeeded: number }[];
+  months: { tier?: string; tier_label?: string; months: number; total: number; succeeded: number }[];
   daily: { date: string; created: number; redeemed: number; succeeded: number }[];
   review_stages: { progress: number; count: number }[];
 };
@@ -31,6 +31,7 @@ export type AdminCode = {
   hint: string;
   batch: string;
   months: number;
+  tier?: string;
   status: string;
   username: string;
   message: string;

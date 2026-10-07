@@ -15,6 +15,7 @@ import {
 import ExpandMoreRounded from "@mui/icons-material/ExpandMoreRounded";
 import QueryStatsRounded from "@mui/icons-material/QueryStatsRounded";
 import { stats as fetchStats, type AdminStatsDetail } from "./adminApi";
+import { giftLabel } from "./tier";
 
 const visuallyHidden = {
   position: "absolute",
@@ -407,7 +408,7 @@ export function StatsPanel({ refreshSignal }: { refreshSignal: number }) {
                   </Stack>
                   <Stack spacing={1.5}>
                     {data.months.map((entry) => (
-                      <Box key={entry.months}>
+                      <Box key={`${entry.tier ?? "premium"}:${entry.months}`}>
                         <Stack
                           direction="row"
                           justifyContent="space-between"
@@ -416,7 +417,7 @@ export function StatsPanel({ refreshSignal }: { refreshSignal: number }) {
                           sx={{ mb: 0.75 }}
                         >
                           <Typography variant="body2" fontWeight={600}>
-                            {entry.months} 个月
+                            {giftLabel(entry.tier, entry.months)}
                           </Typography>
                           <Typography variant="body2" color="text.secondary">
                             共 {entry.total} · 成功 {entry.succeeded}（

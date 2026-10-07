@@ -52,6 +52,7 @@ import { LookupPanel } from "./LookupPanel";
 import { RecoveryPanel } from "./RecoveryPanel";
 import { StatsPanel } from "./StatsPanel";
 import { ManualPaymentPanel } from "./ManualPaymentPanel";
+import { giftLabel, parsePlanKey, planKey, tierLabel } from "./tier";
 
 type Code = AdminCode;
 type Listing = {
@@ -67,8 +68,15 @@ type Generated = {
   codes: string[];
   batch: string;
   months: number;
+  tier?: string;
   folder: string;
 };
+type CatalogPlan = { tier: string; months: number; amount: number; currency: string };
+// Used only when the catalog cannot be read; the server still validates.
+const fallbackPlans: CatalogPlan[] = [
+  { tier: "premium", months: 3, amount: 0, currency: "" },
+  { tier: "premium", months: 6, amount: 0, currency: "" },
+];
 type Confirmation = { kind: "revoke"; code: Code } | null;
 function Admin() {
   const [customerSelection, setCustomerSelection] = useState<{
@@ -81,7 +89,8 @@ function Admin() {
   const [loading, setLoading] = useState(true);
   const [listError, setListError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [months, setMonths] = useState(6);
+  const [plan, setPlan] = useState(planKey("premium", 6));
+  const [plans, setPlans] = useState<CatalogPlan[]>(fallbackPlans);
   const [count, setCount] = useState("10");
   const [batch, setBatch] = useState("");
   const [copyNotice, setCopyNotice] = useState("");
@@ -148,6 +157,24 @@ function Admin() {
   useEffect(() => {
     void refresh(0);
   }, [refresh]);
+  // Code generation offers exactly the (tier, months) plans in the catalog.
+  useEffect(() => {
+    let live = true;
+    api<{ plans: CatalogPlan[] }>("/api/admin/manual-link/plans")
+      .then((data) => {
+        if (!live || !data.plans?.length) return;
+        setPlans(data.plans);
+        setPlan((current) =>
+          data.plans.some((p) => planKey(p.tier, p.months) === current)
+            ? current
+            : planKey(data.plans[0].tier, data.plans[0].months),
+        );
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   // Filter mode: parse the expression, fetch every page client-side, then
   // evaluate the predicate locally. Shares listSequence with refresh() so
@@ -257,14 +284,17 @@ function Admin() {
     setConfirmation(null);
     setNotice(null);
     try {
+      const selected = parsePlanKey(plan);
+      if (!selected) throw new Error("请选择套餐。");
       const data = await api<Generated>("/api/admin/codes", {
-        months,
+        tier: selected.tier,
+        months: selected.months,
         count: Number(count),
         batch: batch.trim(),
       });
       setGenerated(data);
       setNotice({
-        text: `已生成 ${data.codes.length} 枚兑换码，已归入批次「${data.batch}」。点击列表条目即可复制。`,
+        text: `已生成 ${data.codes.length} 枚 ${giftLabel(data.tier, data.months)} 兑换码，已归入批次「${data.batch}」。点击列表条目即可复制。`,
         error: false,
       });
       requestAnimationFrame(() =>
@@ -339,7 +369,7 @@ function Admin() {
     );
     const link = document.createElement("a");
     link.href = url;
-    link.download = `xgift-${generated.months}mo-${Date.now()}.txt`;
+    link.download = `xgift-${generated.tier === "premium_plus" ? "premiumplus" : "premium"}-${generated.months}mo-${Date.now()}.txt`;
     link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -527,14 +557,20 @@ function Admin() {
           >
             <TextField
               select
-              label="套餐时长"
-              value={months}
-              onChange={(event) => setMonths(Number(event.target.value))}
+              label="套餐"
+              value={plan}
+              onChange={(event) => setPlan(event.target.value)}
               disabled={busy}
-              helperText="绑定后不可更改"
+              helperText="档位与时长绑定后不可更改"
             >
-              <MenuItem value={3}>3 个月 Premium</MenuItem>
-              <MenuItem value={6}>6 个月 Premium</MenuItem>
+              {plans.map((p) => (
+                <MenuItem
+                  key={planKey(p.tier, p.months)}
+                  value={planKey(p.tier, p.months)}
+                >
+                  {giftLabel(p.tier, p.months)}
+                </MenuItem>
+              ))}
             </TextField>
             <TextField
               label="生成数量"
@@ -603,8 +639,8 @@ function Admin() {
             color="text.secondary"
             sx={{ my: 1, overflowWrap: "anywhere" }}
           >
-            {generated.batch} · {generated.codes.length} 枚 · {generated.months}{" "}
-            个月
+            {generated.batch} · {generated.codes.length} 枚 ·{" "}
+            {giftLabel(generated.tier, generated.months)}
           </Typography>
           <CopyableCodes key={generated.codes[0]} codes={generated.codes} />
           <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
@@ -811,6 +847,17 @@ function Admin() {
                   </TableCell>
                   <TableCell sx={{ whiteSpace: "nowrap" }}>
                     {code.months} 个月
+                    <Typography
+                      variant="caption"
+                      component="p"
+                      color={
+                        code.tier === "premium_plus"
+                          ? "secondary"
+                          : "text.secondary"
+                      }
+                    >
+                      {tierLabel(code.tier)}
+                    </Typography>
                   </TableCell>
                   <TableCell sx={{ minWidth: 100, maxWidth: 240 }}>
                     <Chip

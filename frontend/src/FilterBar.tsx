@@ -144,6 +144,7 @@ function tokenTone(token: Token): Tone {
   if (token.kind !== "condition") return "neutral";
   if (token.field === "folder") return "secondary";
   if (token.field === "months") return "success";
+  if (token.field === "tier") return "secondary";
   if (token.field === "username") return "warning";
   return STATUS_META[token.value]?.tone ?? "neutral";
 }
@@ -159,6 +160,8 @@ function conditionLabel(token: Extract<Token, { kind: "condition" }>): string {
       return `状态${op}${STATUS_META[token.value]?.label ?? token.value}`;
     case "months":
       return `时长${op}${token.value} 个月`;
+    case "tier":
+      return `档位${op}${token.value === "premium_plus" ? "Premium+" : "Premium"}`;
     case "username":
       return token.value === "-" && !token.literal
         ? `账号${op}未绑定`

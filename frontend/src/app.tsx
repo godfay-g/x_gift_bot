@@ -31,12 +31,15 @@ import { mount, request, Shell } from "./shared";
 import { AppearanceMenu } from "./AppearanceMenu";
 import { ManualPaymentPanel } from "./ManualPaymentPanel";
 import { EligibilityCard } from "./EligibilityCard";
+import { giftLabel, tierLabel } from "./tier";
 
 type Result = {
   status?: string;
   message?: string;
   progress?: number;
   months?: number;
+  tier?: string;
+  tier_label?: string;
   rechecking?: boolean;
   payment_declined?: boolean;
 };
@@ -293,7 +296,7 @@ function App() {
           sx={{ mb: 1 }}
         >
           <Typography component="h1" variant="h2">
-            Premium 兑换
+            Premium / Premium+ 兑换
           </Typography>
           <AppearanceMenu />
         </Stack>
@@ -393,7 +396,9 @@ function App() {
                     ? "请查询原订单进度"
                     : result?.status === "review"
                       ? "重新检查并继续兑换"
-                      : "兑换 Premium"}
+                      : result?.months
+                        ? `兑换 ${tierLabel(result.tier)}`
+                        : "开始兑换"}
             </Button>
             <Button
               variant="outlined"
@@ -491,6 +496,16 @@ function App() {
               </Typography>
             </Box>
           )}
+          {result?.months ? (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mt: 2 }}
+              data-testid="code-plan"
+            >
+              兑换码套餐：<strong>{giftLabel(result.tier, result.months)}</strong>
+            </Typography>
+          ) : null}
           {result && (
             <Alert
               ref={resultAlert}
@@ -513,7 +528,7 @@ function App() {
               fullWidth
               sx={{ mt: 2 }}
             >
-              打开 X 查看 Premium
+              打开 X 查看 {tierLabel(result.tier)}
             </Button>
           )}
         </Box>
@@ -539,7 +554,7 @@ function App() {
           ],
           [
             "账号暂时无法接收赠送怎么办？",
-            "X 会根据账号情况决定是否允许接收 Premium 赠送。兑换前可先用本页的「检测赠送资格」确认账号当前状态。首次建单前资格未通过，兑换码不会使用；已有待核实订单时，请使用原兑换码和账号重新检查，符合条件且尚未付款时会继续兑换。",
+            "X 会根据账号情况决定是否允许接收 Premium / Premium+ 赠送。兑换前可先用本页的「检测赠送资格」确认账号当前状态。首次建单前资格未通过，兑换码不会使用；已有待核实订单时，请使用原兑换码和账号重新检查，符合条件且尚未付款时会继续兑换。",
           ],
           [
             "等待较久或关闭页面后，如何查询？",
@@ -617,14 +632,16 @@ function App() {
         <DialogTitle id="redeem-dialog-title">
           {result?.status === "review"
             ? "重新检查并继续这笔兑换？"
-            : "确认接收 Premium 的账号"}
+            : `确认接收 ${result?.months ? tierLabel(result.tier) : "会员赠送"} 的账号`}
         </DialogTitle>
         <DialogContent>
           <DialogContentText id="redeem-dialog-description">
             接收账号为 <strong>@{cleanUser}</strong>。
             {result?.status === "review"
               ? "将重新核对账号资格和原订单；符合条件且尚未付款时继续付款，已提交过付款的订单只核实结果。"
-              : "提交后将开始兑换，具体时长以兑换码为准。赠送成功后无法更换账号。"}
+              : result?.months
+                ? `提交后将开始兑换 ${giftLabel(result.tier, result.months)}。赠送成功后无法更换账号。`
+                : "提交后将开始兑换，具体档位（Premium / Premium+）和时长以兑换码为准。赠送成功后无法更换账号。"}
           </DialogContentText>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
