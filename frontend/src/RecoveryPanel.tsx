@@ -33,6 +33,7 @@ import {
   type Network,
   type Rotation,
 } from "./PaymentStatusPanel";
+import { giftLabel } from "./tier";
 
 type Item = {
   payment_node?: string;
@@ -42,6 +43,7 @@ type Item = {
   id: string;
   username: string;
   months: number;
+  tier?: string;
   amount: number;
   currency: string;
   state: string;
@@ -143,7 +145,7 @@ function Orders({ items }: { items: Item[] }) {
               <Typography variant="caption">付款节点 {nodeName(item.payment_node)}</Typography>
             )}
             <Typography variant="body2">
-              {item.months} 个月 · {item.currency}{" "}
+              {giftLabel(item.tier, item.months)} · {item.currency}{" "}
               {(item.amount / 100).toFixed(2)}
             </Typography>
             <Typography variant="body2" fontWeight={600} sx={{ mt: 1 }}>
@@ -194,7 +196,7 @@ function Orders({ items }: { items: Item[] }) {
                     {item.payment_node && ` · 付款节点 ${nodeName(item.payment_node)}`}
                   </Typography>
                   <Typography variant="caption" color="text.secondary">
-                    {item.months} 个月
+                    {giftLabel(item.tier, item.months)}
                   </Typography>
                 </TableCell>
                 <TableCell sx={{ whiteSpace: "nowrap", verticalAlign: "top" }}>

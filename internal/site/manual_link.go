@@ -18,13 +18,16 @@ func (s *server) manualLinkPlans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type plan struct {
-		Months   int    `json:"months"`
-		Amount   int    `json:"amount"`
-		Currency string `json:"currency"`
+		Tier      checkout.Tier `json:"tier"`
+		TierLabel string        `json:"tier_label"`
+		Months    int           `json:"months"`
+		Amount    int           `json:"amount"`
+		Currency  string        `json:"currency"`
 	}
 	plans := make([]plan, 0, len(cat.Plans))
 	for _, p := range cat.Plans {
-		plans = append(plans, plan{p.Months, p.Amount, strings.ToUpper(cat.Currency)})
+		tier := p.Tier.Normalize()
+		plans = append(plans, plan{tier, tier.Label(), p.Months, p.Amount, strings.ToUpper(cat.Currency)})
 	}
 	reply(w, 200, map[string]any{"plans": plans})
 }
@@ -51,10 +54,15 @@ func (s *server) manualLink(w http.ResponseWriter, r *http.Request) {
 }
 
 type manualLinkRequest struct {
-	Username       string `json:"username"`
+	Username string `json:"username"`
+	// Tier is "premium" or "premium_plus"; empty (older pages and saved
+	// queue tickets) means premium. Normalised before queueing.
+	Tier           string `json:"tier,omitempty"`
 	Months         int    `json:"months"`
 	VerifiedUnpaid bool   `json:"verified_unpaid"`
 }
+
+func (q manualLinkRequest) tier() checkout.Tier { return checkout.Tier(q.Tier).Normalize() }
 
 func (s *server) generateManualLink(w http.ResponseWriter, r *http.Request, publicOwner string) {
 	var q manualLinkRequest
@@ -62,17 +70,19 @@ func (s *server) generateManualLink(w http.ResponseWriter, r *http.Request, publ
 		return
 	}
 	var ok bool
-	if q.Username, ok = checkout.NormalizeUsername(q.Username); !ok || q.Months < 1 || q.Months > 24 {
-		message(w, 400, "请填写正确的 X 用户名并选择套餐时长。")
+	tier, validTier := parseRequestTier(q.Tier)
+	if q.Username, ok = checkout.NormalizeUsername(q.Username); !ok || !validTier || q.Months < 1 || q.Months > 24 {
+		message(w, 400, "请填写正确的 X 用户名并选择套餐。")
 		return
 	}
+	q.Tier = string(tier)
 	cat, err := checkout.ReadCatalog(s.vault)
 	if err != nil {
 		message(w, 503, "套餐配置暂不可用。")
 		return
 	}
-	if _, err = cat.PlanFor(q.Months); err != nil {
-		message(w, 400, "该套餐时长未配置。")
+	if _, err = cat.PlanFor(tier, q.Months); err != nil {
+		message(w, 400, "该套餐未配置。")
 		return
 	}
 	if publicOwner != "" {
@@ -119,9 +129,9 @@ func (s *server) createLink(ctx context.Context, q manualLinkRequest, publicOwne
 	var record *checkout.Record
 	var err error
 	if publicOwner != "" {
-		record, err = checkout.PublicLinkForUsername(ctx, s.vault, q.Username, publicOwner, s.port, q.Months)
+		record, err = checkout.PublicLinkForUsername(ctx, s.vault, q.Username, publicOwner, s.port, q.tier(), q.Months)
 	} else {
-		record, err = checkout.ManualLinkForUsername(ctx, s.vault, q.Username, s.port, q.Months, q.VerifiedUnpaid)
+		record, err = checkout.ManualLinkForUsername(ctx, s.vault, q.Username, s.port, q.tier(), q.Months, q.VerifiedUnpaid)
 	}
 	if err == nil {
 		return s.linkResult(record, publicOwner)
@@ -158,7 +168,7 @@ func (s *server) createLink(ctx context.Context, q manualLinkRequest, publicOwne
 	case errors.Is(err, checkout.ErrVerifyUnpaid):
 		reason, o = "requires_unpaid_confirmation", linkOutcome{status: 409, body: map[string]any{"message": "原付款链接已失效，请核实原订单未付款后再重新生成。", "needs_unpaid_verification": true}}
 	case errors.Is(err, checkout.ErrNotEligible):
-		reason, o = "ineligible", failed(409, "X 目前不允许 @"+q.Username+" 接收 Premium 赠送，本次没有建单或扣款。可先用本页「检测赠送资格」确认，或改为其他账号。")
+		reason, o = "ineligible", failed(409, "X 目前不允许 @"+q.Username+" 接收 "+q.tier().Label()+" 赠送，本次没有建单或扣款。可先用本页「检测赠送资格」确认，或改为其他账号。")
 	case errors.Is(err, checkout.ErrUserNotFound):
 		reason, o = "user_not_found", failed(404, "未找到 X 用户名 @"+q.Username+"。请填写个人主页 @ 后面的用户名（不是显示名称），核对拼写后重新提交；本次没有建单或扣款。")
 	case errors.Is(err, checkout.ErrManualLinkConflict):
@@ -171,12 +181,12 @@ func (s *server) createLink(ctx context.Context, q manualLinkRequest, publicOwne
 			reason = "x_read_failure"
 		}
 	}
-	log.Printf("manual link failed: public=%t username=%s months=%d reason=%s", publicOwner != "", q.Username, q.Months, reason)
+	log.Printf("manual link failed: public=%t username=%s tier=%s months=%d reason=%s", publicOwner != "", q.Username, q.tier(), q.Months, reason)
 	return o
 }
 
 func (s *server) linkResult(record *checkout.Record, publicOwner string) linkOutcome {
-	result := map[string]any{"username": record.Username, "months": record.Months, "amount": record.Amount, "currency": record.Currency, "status": record.Status}
+	result := map[string]any{"username": record.Username, "tier": record.PlanTier(), "tier_label": record.PlanTier().Label(), "months": record.Months, "amount": record.Amount, "currency": record.Currency, "status": record.Status}
 	if record.Status == "succeeded" {
 		result["message"] = "该客户的这笔订单已付款成功，无需再次付款。"
 		return linkOutcome{status: 200, body: result}
@@ -189,7 +199,7 @@ func (s *server) linkResult(record *checkout.Record, publicOwner string) linkOut
 	if publicOwner != "" {
 		result["expires_at"] = record.Created + int64(checkout.PublicLinkTTL/time.Second)
 		s.invalidateOlderPublicResults(record.Username, link)
-		log.Printf("public link ready: username=%s months=%d stripe_verified=true", record.Username, record.Months)
+		log.Printf("public link ready: username=%s tier=%s months=%d stripe_verified=true", record.Username, record.PlanTier(), record.Months)
 	}
 	return linkOutcome{status: 200, body: result}
 }
@@ -197,7 +207,7 @@ func (s *server) linkResult(record *checkout.Record, publicOwner string) linkOut
 // The current payment-window holder may retrieve its link or replace its own
 // plan without queueing behind others. Busy locks fall back to the queue.
 func (s *server) tryServePublicLink(w http.ResponseWriter, r *http.Request, q manualLinkRequest, owner string) bool {
-	user, months, _, err := checkout.PublicCheckoutWindow(s.vault, time.Now())
+	user, tier, months, _, err := checkout.PublicCheckoutWindow(s.vault, time.Now())
 	if err != nil || user != q.Username {
 		return false
 	}
@@ -210,10 +220,10 @@ func (s *server) tryServePublicLink(w http.ResponseWriter, r *http.Request, q ma
 	defer cancel()
 	var record *checkout.Record
 	hit := true
-	if months != q.Months {
-		record, err = checkout.PublicLinkForUsername(ctx, s.vault, q.Username, owner, s.port, q.Months)
+	if months != q.Months || tier != q.tier() {
+		record, err = checkout.PublicLinkForUsername(ctx, s.vault, q.Username, owner, s.port, q.tier(), q.Months)
 	} else {
-		record, hit, err = checkout.TryCachedPublicLink(ctx, s.vault, q.Username, owner, s.port, q.Months)
+		record, hit, err = checkout.TryCachedPublicLink(ctx, s.vault, q.Username, owner, s.port, q.tier(), q.Months)
 	}
 	if err != nil || !hit {
 		return false

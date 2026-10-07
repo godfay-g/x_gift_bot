@@ -116,7 +116,7 @@ func (s *stripeClient) manualPreflight(ctx context.Context, r *Record, plan Plan
 
 // ManualRecoverForRecipient is available only to the explicit admin batch action.
 // Caller holds checkout.lock. It NEVER replaces a submitted session with a new one.
-func ManualRecoverForRecipient(ctx context.Context, v *vault.Vault, user, recipient string, port, months int) (*Record, error) {
+func ManualRecoverForRecipient(ctx context.Context, v *vault.Vault, user, recipient string, port int, tier Tier, months int) (*Record, error) {
 	raw, err := v.Get("checkout:" + recipient)
 	if err != nil {
 		return nil, err
@@ -130,18 +130,18 @@ func ManualRecoverForRecipient(ctx context.Context, v *vault.Vault, user, recipi
 	if err != nil {
 		return nil, err
 	}
-	plan, err := cat.PlanFor(months)
+	plan, err := cat.PlanFor(tier, months)
 	if err != nil {
 		return nil, err
 	}
-	if r.Username != user || r.RecipientID != recipient || r.Months != months || r.Amount != plan.Minor || r.Currency != strings.ToUpper(plan.Currency) || r.ProductID != plan.ProductID || !sessionURL(r.URL, r.SessionID) {
+	if r.Username != user || r.RecipientID != recipient || !r.matchesPlan(plan) || !sessionURL(r.URL, r.SessionID) {
 		return nil, errors.New("bound order identity or price mismatch")
 	}
 	if r.Status == "succeeded" {
 		return &r, nil
 	}
 	if !IsPaymentDeclined(&r) {
-		return ResumeForRecipient(ctx, v, user, recipient, port, months)
+		return ResumeForRecipient(ctx, v, user, recipient, port, tier, months)
 	}
 	if ManualRetryBlocked(&r) {
 		return &r, errors.New("payment provider forbids retry with this card")

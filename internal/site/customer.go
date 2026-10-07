@@ -14,7 +14,7 @@ func (s *server) customerOrder(w http.ResponseWriter, r *http.Request) {
 	user, validUser := checkout.NormalizeUsername(r.URL.Query().Get("username"))
 	var c codeRow
 	var digest string
-	query := "SELECT id,hint,batch,months,status,username,message,created,updated,progress,COALESCE(recipient_id,''),copyable,hash FROM codes WHERE "
+	query := "SELECT id,hint,batch,months,tier,status,username,message,created,updated,progress,COALESCE(recipient_id,''),copyable,hash FROM codes WHERE "
 	var arg string
 	if id != "" {
 		if !folderIDPattern.MatchString(id) {
@@ -31,7 +31,7 @@ func (s *server) customerOrder(w http.ResponseWriter, r *http.Request) {
 		query += "username=?"
 		arg = user
 	}
-	err := s.db.QueryRow(query, arg).Scan(&c.ID, &c.Hint, &c.Batch, &c.Months, &c.Status, &c.Username, &c.Message, &c.Created, &c.Updated, &c.Progress, &c.RecipientID, &c.Copyable, &digest)
+	err := s.db.QueryRow(query, arg).Scan(&c.ID, &c.Hint, &c.Batch, &c.Months, &c.Tier, &c.Status, &c.Username, &c.Message, &c.Created, &c.Updated, &c.Progress, &c.RecipientID, &c.Copyable, &digest)
 	if errors.Is(err, sql.ErrNoRows) {
 		message(w, 404, "未找到这个客户的订单。")
 		return
@@ -61,7 +61,7 @@ func (s *server) customerOrder(w http.ResponseWriter, r *http.Request) {
 		b, e := s.vault.Get("checkout:" + c.RecipientID)
 		if e == nil {
 			defer clear(b)
-			if json.Unmarshal(b, &order) == nil && order.RecipientID == c.RecipientID && order.Username == c.Username && order.Months == c.Months {
+			if json.Unmarshal(b, &order) == nil && sameGift(&order, &c) {
 				link = checkout.CheckoutLink(&order)
 				if order.PreviousSession != "" {
 					old, e := s.vault.Get("replacement-original:" + order.PreviousSession)
@@ -78,5 +78,5 @@ func (s *server) customerOrder(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	reply(w, 200, map[string]any{"order": c, "code": plain, "checkout_url": link, "previous_checkout_url": previousLink, "can_recover": c.Status == "review" && c.RecipientID != "", "replacement_count": order.ReplacementCount})
+	reply(w, 200, map[string]any{"order": c, "tier_label": codeTier(c.Tier).Label(), "code": plain, "checkout_url": link, "previous_checkout_url": previousLink, "can_recover": c.Status == "review" && c.RecipientID != "", "replacement_count": order.ReplacementCount})
 }

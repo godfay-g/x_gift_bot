@@ -19,6 +19,7 @@ type recoveryItem struct {
 	NeedsUnpaidVerification bool   `json:"needs_unpaid_verification"`
 	ID                      string `json:"id"`
 	Username                string `json:"username"`
+	Tier                    string `json:"tier"`
 	Months                  int    `json:"months"`
 	Amount                  int    `json:"amount"`
 	Currency                string `json:"currency"`
@@ -138,10 +139,10 @@ func (s *server) recoveryStatus(w http.ResponseWriter, r *http.Request) {
 func (s *server) recoveryCandidate(id string) (recoveryItem, error) {
 	item := recoveryItem{ID: id, State: "skipped"}
 	var status string
-	if err := s.db.QueryRow("SELECT username,COALESCE(recipient_id,''),months,status,hint FROM codes WHERE id=?", id).Scan(&item.Username, &item.Recipient, &item.Months, &status, &item.Hint); err != nil {
+	if err := s.db.QueryRow("SELECT username,COALESCE(recipient_id,''),months,tier,status,hint FROM codes WHERE id=?", id).Scan(&item.Username, &item.Recipient, &item.Months, &item.Tier, &status, &item.Hint); err != nil {
 		return item, err
 	}
-	plan, err := s.catalogPlan(item.Months)
+	plan, err := s.catalogPlan(codeTier(item.Tier), item.Months)
 	if err != nil {
 		return item, err
 	}
@@ -162,7 +163,7 @@ func (s *server) recoveryCandidate(id string) (recoveryItem, error) {
 	defer clear(raw)
 	item.Digest = hash(string(raw))
 	var order checkout.Record
-	if json.Unmarshal(raw, &order) != nil || order.Username != item.Username || order.RecipientID != item.Recipient || order.Months != item.Months || order.Amount != plan.Minor || order.Currency != item.Currency || order.ProductID != plan.ProductID {
+	if json.Unmarshal(raw, &order) != nil || order.Username != item.Username || order.RecipientID != item.Recipient || order.Months != item.Months || order.PlanTier() != codeTier(item.Tier) || order.Amount != plan.Minor || order.Currency != item.Currency || order.ProductID != plan.ProductID {
 		item.Detail = "原订单身份或金额不一致"
 		return item, nil
 	}
@@ -529,11 +530,11 @@ func (s *server) recoverOne(item recoveryItem, binding, mode string, verified bo
 	clear(beforeRaw)
 	ctx, cancel := context.WithTimeout(s.ctx, 240*time.Second)
 	defer cancel()
-	record, err := checkout.RecoverWithNewLink(ctx, s.vault, item.Username, item.Recipient, s.port, item.Months, verified, mode == "links")
+	record, err := checkout.RecoverWithNewLink(ctx, s.vault, item.Username, item.Recipient, s.port, codeTier(item.Tier), item.Months, verified, mode == "links")
 	state, detail = "blocked", "未能安全完成，原订单已保留；请检查诊断记录"
-	if record != nil && record.Status == "succeeded" && record.Username == item.Username && record.RecipientID == item.Recipient && record.Months == item.Months && record.Amount == item.Amount && record.Currency == item.Currency {
+	if record != nil && record.Status == "succeeded" && record.Username == item.Username && record.RecipientID == item.Recipient && record.Months == item.Months && record.PlanTier() == codeTier(item.Tier) && record.Amount == item.Amount && record.Currency == item.Currency {
 		state = "succeeded"
-		detail = fmt.Sprintf("已为 @%s 完成 %d 个月 Premium 赠送。", item.Username, item.Months)
+		detail = fmt.Sprintf("已为 @%s 完成 %s 赠送。", item.Username, checkout.GiftDescription(codeTier(item.Tier), item.Months))
 	} else if err == nil && mode == "links" && checkout.CheckoutLink(record) != "" {
 		state, detail = "link_ready", "补单付款链接已准备好，本次未付款。"
 	} else if checkout.IsPaymentDeclined(record) && (record.RecoveryAttempts > before.RecoveryAttempts || record.SubmittedAt > before.SubmittedAt) {
@@ -580,7 +581,7 @@ func (s *server) recoverOne(item recoveryItem, binding, mode string, verified bo
 	if state == "succeeded" {
 		siteState = "succeeded"
 	}
-	res, e := s.db.Exec("UPDATE codes SET status=?,message=?,updated=?,progress=CASE WHEN ?='succeeded' THEN 100 ELSE progress END WHERE id=? AND status='review' AND username=? AND recipient_id=? AND months=?", siteState, detail, time.Now().Unix(), siteState, item.ID, item.Username, item.Recipient, item.Months)
+	res, e := s.db.Exec("UPDATE codes SET status=?,message=?,updated=?,progress=CASE WHEN ?='succeeded' THEN 100 ELSE progress END WHERE id=? AND status='review' AND username=? AND recipient_id=? AND months=? AND tier=?", siteState, detail, time.Now().Unix(), siteState, item.ID, item.Username, item.Recipient, item.Months, item.Tier)
 	if e != nil {
 		return "blocked", "结果写入失败，请核实原订单；任务已停止", true
 	}

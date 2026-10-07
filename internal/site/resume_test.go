@@ -32,11 +32,11 @@ func resumeFixture(t *testing.T, status, ledgerStatus string) *server {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { db.Close() })
-	_, e = db.Exec(`CREATE TABLE codes(id TEXT PRIMARY KEY, hash TEXT UNIQUE, hint TEXT, batch TEXT, months INTEGER, status TEXT, username TEXT, recipient_id TEXT UNIQUE, message TEXT, created INTEGER, updated INTEGER, progress INTEGER);`)
+	_, e = db.Exec(`CREATE TABLE codes(id TEXT PRIMARY KEY, hash TEXT UNIQUE, hint TEXT, batch TEXT, months INTEGER, status TEXT, username TEXT, recipient_id TEXT UNIQUE, message TEXT, created INTEGER, updated INTEGER, progress INTEGER, tier TEXT NOT NULL DEFAULT 'premium');`)
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = db.Exec("INSERT INTO codes VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", "code1", hash("XG-"+strings.Repeat("A", 48)), "AAAA", "batch", 6, status, "recipient", "1234", "original", 123, 124, 50)
+	_, e = db.Exec("INSERT INTO codes(id,hash,hint,batch,months,status,username,recipient_id,message,created,updated,progress) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", "code1", hash("XG-"+strings.Repeat("A", 48)), "AAAA", "batch", 6, status, "recipient", "1234", "original", 123, 124, 50)
 	if e != nil {
 		t.Fatal(e)
 	}

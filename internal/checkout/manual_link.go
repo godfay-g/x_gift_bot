@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"strings"
 	"xgift/internal/vault"
 )
 
@@ -14,7 +13,7 @@ var ErrPaymentActionRequired = errors.New("bank authentication required")
 
 // ManualLinkForUsername creates/reuses a guarded checkout without tokenizing or
 // confirming a card. No redemption code is required. Caller holds checkout.lock.
-func ManualLinkForUsername(ctx context.Context, v *vault.Vault, user string, port, months int, verifiedUnpaid bool) (*Record, error) {
+func ManualLinkForUsername(ctx context.Context, v *vault.Vault, user string, port int, tier Tier, months int, verifiedUnpaid bool) (*Record, error) {
 	user, ok := NormalizeUsername(user)
 	if !ok {
 		return nil, errors.New("invalid username")
@@ -23,7 +22,7 @@ func ManualLinkForUsername(ctx context.Context, v *vault.Vault, user string, por
 	if err != nil {
 		return nil, err
 	}
-	if _, err = cat.PlanFor(months); err != nil {
+	if _, err = cat.PlanFor(tier, months); err != nil {
 		return nil, err
 	}
 	x, err := newXClient(v, port)
@@ -35,13 +34,13 @@ func ManualLinkForUsername(ctx context.Context, v *vault.Vault, user string, por
 	if err != nil {
 		return nil, err
 	}
-	return manualLinkForRecipient(ctx, v, user, recipient, port, months, verifiedUnpaid)
+	return manualLinkForRecipient(ctx, v, user, recipient, port, tier, months, verifiedUnpaid)
 }
 
-func manualLinkForRecipient(ctx context.Context, v *vault.Vault, user, recipient string, port, months int, verifiedUnpaid bool) (*Record, error) {
+func manualLinkForRecipient(ctx context.Context, v *vault.Vault, user, recipient string, port int, tier Tier, months int, verifiedUnpaid bool) (*Record, error) {
 	raw, err := v.Get("checkout:" + recipient)
 	if errors.Is(err, sql.ErrNoRows) {
-		return RunForRecipient(ctx, v, user, recipient, false, port, months)
+		return RunForRecipient(ctx, v, user, recipient, false, port, tier, months)
 	}
 	if err != nil {
 		return nil, err
@@ -55,18 +54,18 @@ func manualLinkForRecipient(ctx context.Context, v *vault.Vault, user, recipient
 	if err != nil {
 		return nil, err
 	}
-	plan, err := cat.PlanFor(months)
+	plan, err := cat.PlanFor(tier, months)
 	if err != nil {
 		return nil, err
 	}
-	if r.Username != user || r.RecipientID != recipient || r.Months != months || r.Amount != plan.Minor || r.Currency != strings.ToUpper(plan.Currency) || r.ProductID != plan.ProductID {
+	if r.Username != user || r.RecipientID != recipient || !r.matchesPlan(plan) {
 		return nil, ErrManualLinkConflict
 	}
 	if r.Status == "succeeded" {
 		return &r, nil
 	}
 	if r.Status == "requires_action" {
-		current, lookupErr := PrepareRecoveryLinkForRecipient(ctx, v, user, recipient, port, months, false)
+		current, lookupErr := PrepareRecoveryLinkForRecipient(ctx, v, user, recipient, port, tier, months, false)
 		if lookupErr == nil || errors.Is(lookupErr, ErrPaymentActionRequired) {
 			return current, nil
 		}
@@ -75,7 +74,7 @@ func manualLinkForRecipient(ctx context.Context, v *vault.Vault, user, recipient
 		if err = RetireCanceledAuthentication(ctx, v, recipient); err != nil {
 			return &r, err
 		}
-		return RunForRecipient(ctx, v, user, recipient, false, port, months)
+		return RunForRecipient(ctx, v, user, recipient, false, port, tier, months)
 	}
-	return PrepareRecoveryLinkForRecipient(ctx, v, user, recipient, port, months, verifiedUnpaid)
+	return PrepareRecoveryLinkForRecipient(ctx, v, user, recipient, port, tier, months, verifiedUnpaid)
 }

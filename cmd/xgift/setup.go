@@ -575,7 +575,7 @@ func majorToMinor(s string) (int, error) {
 
 func (w *wizard) setupCatalog(v *vault.Vault) error {
 	fmt.Println("—— 商品目录 ——")
-	fmt.Println("目录记录商户、币种与允许购买的套餐（时长、金额、商品 ID），金额最终以最小货币单位保存。")
+	fmt.Println("目录记录商户、币种与允许购买的套餐（档位、时长、金额、商品 ID），金额最终以最小货币单位保存。")
 	useDefault, err := w.yesNo("使用 X Premium 默认目录？", true)
 	if err != nil {
 		return err
@@ -583,14 +583,17 @@ func (w *wizard) setupCatalog(v *vault.Vault) error {
 	var catalog checkout.Catalog
 	if useDefault {
 		catalog = checkout.Catalog{Merchant: defaultXMerchant, Currency: defaultXCurrency, Plans: []checkout.CatalogPlan{
-			{Months: 3, Amount: 30000, Product: defaultXProduct3Mo},
-			{Months: 6, Amount: 60000, Product: defaultXProduct6Mo},
+			{Tier: checkout.TierPremium, Months: 3, Amount: 30000, Product: defaultXProduct3Mo},
+			{Tier: checkout.TierPremium, Months: 6, Amount: 60000, Product: defaultXProduct6Mo},
 		}}
 	} else {
 		catalog, err = w.customCatalog()
 		if err != nil {
 			return err
 		}
+	}
+	if err = w.addPremiumPlusPlans(&catalog); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(catalog)
 	if err != nil {
@@ -648,9 +651,64 @@ func (w *wizard) customCatalog() (checkout.Catalog, error) {
 		if err != nil {
 			return catalog, err
 		}
-		catalog.Plans = append(catalog.Plans, checkout.CatalogPlan{Months: months, Amount: minor, Product: product})
+		catalog.Plans = append(catalog.Plans, checkout.CatalogPlan{Tier: checkout.TierPremium, Months: months, Amount: minor, Product: product})
 	}
 	return catalog, nil
+}
+
+// addPremiumPlusPlans optionally appends Premium+ plans. There are no default
+// Premium+ product IDs: the operator must read the product ID, price and
+// exact Stripe product name from x.com (see docs/premium-plus.md).
+func (w *wizard) addPremiumPlusPlans(catalog *checkout.Catalog) error {
+	room := checkout.MaxCatalogPlans - len(catalog.Plans)
+	if room <= 0 {
+		return nil
+	}
+	add, err := w.yesNo("是否添加 Premium+ 赠送套餐？（需自行从 x.com 获取商品 ID、价格与 Stripe 商品名，见 docs/premium-plus.md）", false)
+	if err != nil || !add {
+		return err
+	}
+	fmt.Printf("Premium+ 套餐使用同一商户（%s）与币种（%s）。请先用只读查询确认 Premium+ 的商户与币种一致，否则不要添加。\n", catalog.Merchant, strings.ToUpper(catalog.Currency))
+	countStr, err := w.prompt(fmt.Sprintf("Premium+ 套餐数量（1-%d）", room), "1")
+	if err != nil {
+		return err
+	}
+	count, err := strconv.Atoi(countStr)
+	if err != nil || count < 1 || count > room {
+		return fmt.Errorf("Premium+ 套餐数量必须在 1 到 %d 之间", room)
+	}
+	for i := 1; i <= count; i++ {
+		monthsStr, err := w.prompt(fmt.Sprintf("Premium+ 套餐 %d 时长（月，1-24；以 x.com 赠送页实际提供的时长为准）", i), "")
+		if err != nil {
+			return err
+		}
+		months, err := strconv.Atoi(monthsStr)
+		if err != nil {
+			return errors.New("时长必须是整数月数")
+		}
+		amountStr, err := w.prompt(fmt.Sprintf("Premium+ 套餐 %d 金额（%s，须与 X 报价完全一致）", i, strings.ToUpper(catalog.Currency)), "")
+		if err != nil {
+			return err
+		}
+		minor, err := majorToMinor(amountStr)
+		if err != nil {
+			return err
+		}
+		product, err := w.prompt(fmt.Sprintf("Premium+ 套餐 %d Stripe 商品 ID（prod_...，即 stripeId / external_product_id）", i), "")
+		if err != nil {
+			return err
+		}
+		name, err := w.prompt(fmt.Sprintf("Premium+ 套餐 %d Stripe 结账页商品名（逐字复制，付款前会严格比对）", i), "")
+		if err != nil {
+			return err
+		}
+		name = strings.TrimSpace(name)
+		if !checkout.ValidPlanName(name) {
+			return fmt.Errorf("商品名须为 1-%d 字节、不含控制字符且首尾无空格", checkout.MaxPlanNameBytes)
+		}
+		catalog.Plans = append(catalog.Plans, checkout.CatalogPlan{Tier: checkout.TierPremiumPlus, Months: months, Amount: minor, Product: product, Name: name})
+	}
+	return nil
 }
 
 func (w *wizard) setupSite(db, passwordFile string) (bool, error) {

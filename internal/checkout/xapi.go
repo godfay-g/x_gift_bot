@@ -15,17 +15,27 @@ import (
 )
 
 type Plan struct {
+	Tier          Tier
 	Months, Minor int
 	ProductID     string
-	Merchant      string
-	Currency      string
+	// ProductName is the configured exact Stripe product name; empty means
+	// the tier's default naming (only allowed for Premium).
+	ProductName string
+	Merchant    string
+	Currency    string
 }
 
-var ErrNotEligible = errors.New("recipient cannot receive Premium gifts")
+var ErrNotEligible = errors.New("recipient cannot receive gifts")
 var ErrUserNotFound = errors.New("recipient was not found")
 var ErrXReadFailure = errors.New("X account or price query failed")
 
 // Eligibility is read-only: it neither creates a checkout nor submits a payment.
+//
+// TODO(premium-plus): X only exposes premium_gifting_eligible here. It is used
+// for both Premium and Premium+ gifts, but it has NOT been verified that the
+// same flag gates Premium+ gifting (e.g. a recipient who already has Premium
+// may be eligible for Premium+ or vice versa). Verify against x.com before
+// relying on it for Premium+; see docs/premium-plus.md.
 func Eligibility(ctx context.Context, v *vault.Vault, user string, port int) (string, error) {
 	c, err := newXClient(v, port)
 	if err != nil {
@@ -35,7 +45,22 @@ func Eligibility(ctx context.Context, v *vault.Vault, user string, port int) (st
 	return c.recipient(ctx, user)
 }
 
-func (p Plan) Name() string { return fmt.Sprintf("Premium Gift - %d months", p.Months) }
+// Name is the exact Stripe product / line-item name the payment guard expects.
+// A configured name always wins. Premium keeps X's historical naming; the
+// Premium+ fallback is only a placeholder because ParseCatalog requires an
+// explicit name for premium_plus plans.
+func (p Plan) Name() string {
+	if p.ProductName != "" {
+		return p.ProductName
+	}
+	if p.Tier.Normalize() == TierPremiumPlus {
+		return fmt.Sprintf("Premium+ Gift - %d months", p.Months)
+	}
+	return fmt.Sprintf("Premium Gift - %d months", p.Months)
+}
+
+// Label is the user-facing tier label (Premium / Premium+).
+func (p Plan) Label() string { return p.Tier.Label() }
 
 type xClient struct {
 	// Set only after validating an explicitly replaced public order.
@@ -257,8 +282,9 @@ func (c *xClient) identity(ctx context.Context, user string, requireEligible boo
 		Data struct {
 			User struct {
 				Result struct {
-					ID       string `json:"rest_id"`
-					Eligible bool   `json:"premium_gifting_eligible"`
+					ID string `json:"rest_id"`
+					// TODO(premium-plus): verify this flag also governs Premium+ gifts.
+					Eligible bool `json:"premium_gifting_eligible"`
 					Core     struct {
 						Screen string `json:"screen_name"`
 					} `json:"core"`
