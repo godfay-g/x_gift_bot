@@ -13,16 +13,16 @@ import (
 )
 
 // Inspect only reads the existing order and asks Stripe for its current status.
-func Inspect(ctx context.Context, v *vault.Vault, user string, port, months int) error {
-	return inspect(ctx, v, user, port, months, false)
+func Inspect(ctx context.Context, v *vault.Vault, user string, port int, tier Tier, months int) error {
+	return inspect(ctx, v, user, port, tier, months, false)
 }
 
 // RetireCanceled never creates or confirms a payment. Caller must hold checkout.lock.
-func RetireCanceled(ctx context.Context, v *vault.Vault, user string, port, months int) error {
-	return inspect(ctx, v, user, port, months, true)
+func RetireCanceled(ctx context.Context, v *vault.Vault, user string, port int, tier Tier, months int) error {
+	return inspect(ctx, v, user, port, tier, months, true)
 }
 
-func inspect(ctx context.Context, v *vault.Vault, user string, port, months int, retire bool) error {
+func inspect(ctx context.Context, v *vault.Vault, user string, port int, tier Tier, months int, retire bool) error {
 	user = strings.ToLower(strings.TrimPrefix(user, "@"))
 	x, e := newXClient(v, port)
 	if e != nil {
@@ -46,11 +46,11 @@ func inspect(ctx context.Context, v *vault.Vault, user string, port, months int,
 	if e != nil {
 		return e
 	}
-	plan, e := catalog.PlanFor(months)
+	plan, e := catalog.PlanFor(tier, months)
 	if e != nil {
 		return e
 	}
-	if r.RecipientID != id || r.Months != plan.Months || r.Amount != plan.Minor || r.Currency != strings.ToUpper(plan.Currency) || r.ProductID != plan.ProductID {
+	if r.RecipientID != id || !r.matchesPlan(plan) {
 		return errors.New("recorded recipient or plan mismatch")
 	}
 	if !sessionURL(r.URL, r.SessionID) {

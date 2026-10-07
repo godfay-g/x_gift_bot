@@ -31,7 +31,7 @@ func RetireCanceledAuthentication(ctx context.Context, v *vault.Vault, recipient
 	if err != nil {
 		return err
 	}
-	plan, err := cat.PlanFor(r.Months)
+	plan, err := cat.PlanFor(r.PlanTier(), r.Months)
 	if err != nil {
 		return err
 	}

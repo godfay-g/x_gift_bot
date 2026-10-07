@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"strings"
 	"time"
 	"xgift/internal/vault"
 )
@@ -65,7 +64,7 @@ func PublicOrderPaid(ctx context.Context, v *vault.Vault, r *Record) (bool, erro
 	if err != nil {
 		return false, err
 	}
-	plan := Plan{Months: r.Months, Minor: r.Amount, Currency: strings.ToLower(r.Currency), ProductID: r.ProductID, Merchant: cat.Merchant}
+	plan := cat.PlanForRecord(r)
 	return verifiedCheckoutPaid(ctx, v, r, plan)
 }
 

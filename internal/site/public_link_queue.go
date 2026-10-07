@@ -246,7 +246,7 @@ func (s *server) processPublicLinkQueue(ctx context.Context, create func(context
 		}
 	}
 	// Replacing the active user's own plan does not take another person's slot.
-	if user, _, _, err := checkout.PublicCheckoutWindow(s.vault, now); err == nil && user != "" {
+	if user, _, _, _, err := checkout.PublicCheckoutWindow(s.vault, now); err == nil && user != "" {
 		for _, j := range q.jobs {
 			if dispatchable(j) && j.Request.Username == user {
 				job = j
@@ -317,7 +317,7 @@ func (q *publicLinkQueue) remove(job *publicLinkJob) {
 // Caller holds the queue mutex. Reads persisted state so a restart or a new
 // browser sees the current payment window before its first worker attempt.
 func (s *server) refreshPublicLinkWait(now time.Time) {
-	if user, _, _, err := checkout.PublicCheckoutWindow(s.vault, now); err == nil {
+	if user, _, _, _, err := checkout.PublicCheckoutWindow(s.vault, now); err == nil {
 		s.linkQueue.windowUser = user
 	}
 	if wait, err := checkout.CheckoutCreationWait(s.vault, now); err == nil {

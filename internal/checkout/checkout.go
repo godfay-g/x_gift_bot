@@ -28,14 +28,25 @@ type Record struct {
 
 	Username    string `json:"username"`
 	RecipientID string `json:"recipient_id"`
-	Months      int    `json:"months"`
-	Amount      int    `json:"amount_minor"`
-	Currency    string `json:"currency"`
-	ProductID   string `json:"product_id"`
-	SessionID   string `json:"session_id"`
-	URL         string `json:"url"`
-	Status      string `json:"status"`
-	Created     int64  `json:"created"`
+	// Tier is omitted in records written before Premium+ support; PlanTier
+	// maps that to Premium.
+	Tier      Tier   `json:"tier,omitempty"`
+	Months    int    `json:"months"`
+	Amount    int    `json:"amount_minor"`
+	Currency  string `json:"currency"`
+	ProductID string `json:"product_id"`
+	SessionID string `json:"session_id"`
+	URL       string `json:"url"`
+	Status    string `json:"status"`
+	Created   int64  `json:"created"`
+}
+
+// PlanTier is the order's tier; legacy records without a tier are Premium.
+func (r *Record) PlanTier() Tier { return r.Tier.Normalize() }
+
+// matchesPlan reports whether the order was created for exactly this plan.
+func (r *Record) matchesPlan(plan Plan) bool {
+	return r.PlanTier() == plan.Tier.Normalize() && r.Months == plan.Months && r.Amount == plan.Minor && r.Currency == strings.ToUpper(plan.Currency) && r.ProductID == plan.ProductID
 }
 
 var usernamePattern = regexp.MustCompile(`^[a-z0-9_]{1,15}$`)
@@ -65,19 +76,19 @@ func save(v *vault.Vault, r *Record) error {
 	}
 	return v.Put("checkout:"+r.RecipientID, b)
 }
-func Run(ctx context.Context, v *vault.Vault, user string, pay bool, port, months int) (*Record, error) {
-	return run(ctx, v, user, "", pay, port, months)
+func Run(ctx context.Context, v *vault.Vault, user string, pay bool, port int, tier Tier, months int) (*Record, error) {
+	return run(ctx, v, user, "", pay, port, tier, months)
 }
 
 // RunForRecipient pins a redemption to the identity checked before reserving its code.
-func RunForRecipient(ctx context.Context, v *vault.Vault, user, expectedRecipient string, pay bool, port, months int) (*Record, error) {
+func RunForRecipient(ctx context.Context, v *vault.Vault, user, expectedRecipient string, pay bool, port int, tier Tier, months int) (*Record, error) {
 	if expectedRecipient == "" {
 		return nil, errors.New("expected recipient is required")
 	}
-	return run(ctx, v, user, expectedRecipient, pay, port, months)
+	return run(ctx, v, user, expectedRecipient, pay, port, tier, months)
 }
 
-func run(ctx context.Context, v *vault.Vault, user, expectedRecipient string, pay bool, port, months int) (*Record, error) {
+func run(ctx context.Context, v *vault.Vault, user, expectedRecipient string, pay bool, port int, tier Tier, months int) (*Record, error) {
 	if pay {
 		paused, err := PaymentPaused(v)
 		if err != nil {
@@ -95,7 +106,7 @@ func run(ctx context.Context, v *vault.Vault, user, expectedRecipient string, pa
 	if e != nil {
 		return nil, e
 	}
-	plan, e := catalog.PlanFor(months)
+	plan, e := catalog.PlanFor(tier, months)
 	if e != nil {
 		return nil, e
 	}
@@ -128,7 +139,7 @@ func run(ctx context.Context, v *vault.Vault, user, expectedRecipient string, pa
 	var r Record
 	raw, e := v.Get("checkout:" + recipient)
 	if e == nil {
-		if json.Unmarshal(raw, &r) != nil || r.RecipientID != recipient || r.Months != plan.Months || r.Amount != plan.Minor || r.Currency != strings.ToUpper(plan.Currency) || r.ProductID != plan.ProductID {
+		if json.Unmarshal(raw, &r) != nil || r.RecipientID != recipient || !r.matchesPlan(plan) {
 			return nil, errors.New("existing checkout differs from this recipient or plan; refusing another order")
 		}
 		if r.Status == "creating" {
@@ -165,7 +176,7 @@ func run(ctx context.Context, v *vault.Vault, user, expectedRecipient string, pa
 			return &r, e
 		}
 		if r.Status == "" {
-			r = Record{Username: user, RecipientID: recipient, Months: plan.Months, Amount: plan.Minor, Currency: strings.ToUpper(plan.Currency), ProductID: plan.ProductID, Status: "creating", Created: time.Now().Unix()}
+			r = Record{Username: user, RecipientID: recipient, Tier: plan.Tier, Months: plan.Months, Amount: plan.Minor, Currency: strings.ToUpper(plan.Currency), ProductID: plan.ProductID, Status: "creating", Created: time.Now().Unix()}
 		}
 		// Reserve the creation durably. Creating a checkout never charges; a lost
 		// response can leave an unused external session, but only the saved one is paid.

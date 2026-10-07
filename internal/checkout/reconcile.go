@@ -26,7 +26,7 @@ func Reconcile(ctx context.Context, v *vault.Vault, recipient string, port int) 
 	if err != nil {
 		return nil, err
 	}
-	plan, err := catalog.PlanFor(r.Months)
+	plan, err := catalog.PlanFor(r.PlanTier(), r.Months)
 	if err != nil {
 		return nil, err
 	}

@@ -90,5 +90,5 @@ func (s *server) currentPublicLinkQueue(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	found.Seen, found.Left = now, time.Time{}
-	reply(w, 200, map[string]any{"ticket": found.ID, "username": found.Request.Username, "months": found.Request.Months})
+	reply(w, 200, map[string]any{"ticket": found.ID, "username": found.Request.Username, "tier": found.Request.tier(), "tier_label": found.Request.tier().Label(), "months": found.Request.Months})
 }

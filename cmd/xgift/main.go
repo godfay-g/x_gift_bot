@@ -40,7 +40,7 @@ func run() error {
 		a := args[i]
 		if strings.HasPrefix(a, "-") {
 			rest = append(rest, a)
-			if a == "--db" || a == "--password-file" || a == "--profile" || a == "--port" || a == "--name" || a == "--months" || a == "--last4" {
+			if a == "--db" || a == "--password-file" || a == "--profile" || a == "--port" || a == "--name" || a == "--months" || a == "--tier" || a == "--last4" {
 				i++
 				if i >= len(args) {
 					return errors.New("missing flag value")
@@ -70,6 +70,7 @@ func run() error {
 	profile := f.String("profile", "Default", "Chrome directory name")
 	port := f.Int("port", 0, "local proxy port; default automatic (proxy command: 18791)")
 	months := f.Int("months", 6, "gift duration in months; must match a plan in the catalog record")
+	tierFlag := f.String("tier", "premium", "gift tier: premium or premium_plus; with --months must match a catalog plan")
 	last4 := f.String("last4", "", "card tail for cards remove")
 	retire := f.Bool("retire-canceled", false, "archive an inactive, canceled, unpaid order after read-only verification")
 	inspect := f.Bool("inspect", false, "read the existing Stripe order status without paying")
@@ -240,10 +241,14 @@ func run() error {
 		}
 		clear(key)
 		fmt.Println("stripe-key: encrypted record verified")
-		if _, e = checkout.ReadCatalog(v); e != nil {
+		cat, e := checkout.ReadCatalog(v)
+		if e != nil {
 			return e
 		}
 		fmt.Println("catalog: encrypted record verified")
+		for _, p := range cat.Plans {
+			fmt.Printf("  plan: tier=%s months=%d\n", p.Tier.Normalize(), p.Months)
+		}
 		return nil
 	case "import-chrome":
 		b, e := chrome.Extract(*profile)
@@ -368,16 +373,20 @@ func run() error {
 	if command == "check" {
 		return proxy.Check(ctx, *port)
 	}
+	tier, ok := checkout.ParseTier(*tierFlag)
+	if !ok {
+		return errors.New("--tier must be premium or premium_plus")
+	}
 	if *inspect {
-		return checkout.Inspect(ctx, v, command, *port, *months)
+		return checkout.Inspect(ctx, v, command, *port, tier, *months)
 	}
 	if *retire {
 		if *pay {
 			return errors.New("--retire-canceled cannot be combined with --pay")
 		}
-		return checkout.RetireCanceled(ctx, v, command, *port, *months)
+		return checkout.RetireCanceled(ctx, v, command, *port, tier, *months)
 	}
-	result, e := checkout.Run(ctx, v, command, *pay, *port, *months)
+	result, e := checkout.Run(ctx, v, command, *pay, *port, tier, *months)
 	if result != nil {
 		if e == nil || result.Status == "requires_action" || result.Status == "unknown" || result.Status == "submitting" {
 			fmt.Println(result.URL)
