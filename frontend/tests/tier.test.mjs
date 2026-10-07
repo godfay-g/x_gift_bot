@@ -28,3 +28,17 @@ test('filter supports tier conditions', () => {
   assert.equal(parseFilter('tier!=premium and months:12')(plus), true);
   assert.throws(() => parseFilter('tier:gold'), /档位/);
 });
+
+test('tier palette chips produce filters that match their tier', async () => {
+  const { TIER_FILTER_OPTIONS } = await import('../src/tier.ts');
+  assert.deepEqual(TIER_FILTER_OPTIONS.map((o) => [o.value, o.label]), [['premium', 'Premium'], ['premium_plus', 'Premium+']]);
+  const legacy = { tier: undefined, months: 6, status: 'active', batch: '', username: '' };
+  const plus = { tier: 'premium_plus', months: 12, status: 'active', batch: '', username: '' };
+  for (const { value } of TIER_FILTER_OPTIONS) {
+    const match = parseFilter(`tier:${value}`);
+    assert.equal(match(legacy), value === 'premium');
+    assert.equal(match(plus), value === 'premium_plus');
+    assert.equal(parseFilter(`tier!=${value}`)(plus), value !== 'premium_plus');
+  }
+  assert.equal(parseFilter('tier:premium_plus and months:12')(plus), true);
+});

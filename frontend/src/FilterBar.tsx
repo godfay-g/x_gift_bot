@@ -19,6 +19,7 @@ import CodeOutlined from "@mui/icons-material/CodeOutlined";
 import FilterAltOutlined from "@mui/icons-material/FilterAltOutlined";
 import PaletteOutlined from "@mui/icons-material/PaletteOutlined";
 import type { Folder } from "./adminApi";
+import { TIER_FILTER_OPTIONS } from "./tier";
 import {
   FILTER_HINT,
   parseExpressionTokens,
@@ -757,7 +758,7 @@ export function FilterBar({
               color="text.secondary"
               sx={{ mt: { md: 0.75 } }}
             >
-              时长
+              时长 / 档位
             </Typography>
             <Stack direction="row" useFlexGap gap={1} flexWrap="wrap">
               {["3", "6"].map((months) => (
@@ -780,6 +781,28 @@ export function FilterBar({
                     })
                   }
                   ariaLabel={`添加时长条件 ${months} 个月`}
+                />
+              ))}
+              {TIER_FILTER_OPTIONS.map((tier) => (
+                <PaletteButton
+                  key={tier.value}
+                  label={tier.label}
+                  dot="secondary"
+                  disabled={conditionDisabled}
+                  tooltip={
+                    conditionDisabled
+                      ? operandReason
+                      : `添加 档位:${tier.label}`
+                  }
+                  onClick={() =>
+                    add({
+                      kind: "condition",
+                      field: "tier",
+                      value: tier.value,
+                      negate: false,
+                    })
+                  }
+                  ariaLabel={`添加档位条件 ${tier.label}`}
                 />
               ))}
             </Stack>

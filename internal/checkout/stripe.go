@@ -432,7 +432,13 @@ func idempotency(r *Record, operation string) string {
 	if r.ManualRecovery {
 		operation += fmt.Sprintf(":manual:%d", r.RecoveryAttempts)
 	}
-	sum := sha256.Sum256([]byte("xgift-v1:" + operation + ":" + r.SessionID + ":" + r.RecipientID + ":" + strconv.Itoa(r.Months)))
+	material := "xgift-v1:" + operation + ":" + r.SessionID + ":" + r.RecipientID + ":" + strconv.Itoa(r.Months)
+	// Premium keys keep the original derivation so records written before
+	// tiers existed still verify; any other tier is bound into the key.
+	if tier := r.PlanTier(); tier != TierPremium {
+		material += ":tier:" + string(tier)
+	}
+	sum := sha256.Sum256([]byte(material))
 	return "xgift-" + hex.EncodeToString(sum[:])
 }
 func confirmationForm(r *Record, p *paymentPage, method string, plan Plan) url.Values {

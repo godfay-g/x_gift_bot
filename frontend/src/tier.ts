@@ -25,3 +25,9 @@ export function parsePlanKey(key: string): { tier: Tier; months: number } | null
   if (!match) return null;
   return { tier: match[1] as Tier, months: Number(match[2]) };
 }
+
+// Tier chips offered in the admin filter palette; values are filter tokens.
+export const TIER_FILTER_OPTIONS: ReadonlyArray<{ value: Tier; label: string }> = [
+  { value: "premium", label: "Premium" },
+  { value: "premium_plus", label: "Premium+" },
+];

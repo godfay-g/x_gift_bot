@@ -22,7 +22,8 @@ X 的赠送流程对 Premium 与 Premium+ 是同一套内部接口：
 - **订单记录（vault `checkout:*` / `public-checkout:*`）**：新增 `tier` 字段；旧记录没有该字段，一律视为 `premium`。所有「订单是否属于这个兑换码/套餐」的比对都包含档位。
 - **兑换码（site.db `codes` 表）**：新增 `tier` 列（默认 `'premium'`），并放宽原来的 `months IN (3,6)` 约束为 `1–24`，以便存放 Premium+ 的时长（例如 12 个月）。实际能否生成某个档位/时长的兑换码由商品目录决定。
 - **用户可见文案**：成功、资格不足等提示根据兑换码档位显示「Premium」或「Premium+」；兑换页在查询/兑换后显示「兑换码套餐：N 个月 Premium+」。
-- **后台**：生成兑换码时从已配置套餐中选择「档位 + 时长」；列表、查询、客户详情、补单、统计（按档位+时长分组）都会显示档位；筛选表达式支持 `tier:premium_plus`。
+- **后台**：生成兑换码时从已配置套餐中选择「档位 + 时长」；列表、查询、客户详情、补单、统计（按档位+时长分组）都会显示档位；筛选栏提供 Premium / Premium+ 档位快捷按钮，表达式支持 `tier:premium_plus`。
+- **Stripe 幂等键**：非 Premium 档位的订单会把档位加入幂等键推导；Premium 订单（含无 `tier` 的旧记录）的幂等键保持不变，已提交订单的对账校验不受影响。
 - **CLI**：`xgift <用户名> --tier premium_plus --months 12 [--inspect|--pay]`；`--tier` 缺省为 `premium`。
 
 ### 为什么 Premium+ 必须配置 `name`
