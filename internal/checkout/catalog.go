@@ -156,6 +156,9 @@ func ParseCatalog(raw []byte) (Catalog, error) {
 		if tier == TierPremiumPlus && p.Name == "" {
 			return c, errors.New("premium_plus catalog plans must set name to the exact Stripe product name")
 		}
+		if strings.HasPrefix(p.Name, "<") && strings.HasSuffix(p.Name, ">") {
+			return c, errors.New("catalog plan name is still a placeholder; copy the exact Stripe checkout product name")
+		}
 		if p.Name != "" && !ValidPlanName(p.Name) {
 			return c, fmt.Errorf("catalog plan name must be 1-%d bytes without control characters or surrounding spaces", MaxPlanNameBytes)
 		}

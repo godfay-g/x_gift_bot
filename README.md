@@ -121,6 +121,17 @@ curl https://你的域名/healthz     # {"ok":true,...} 即成功
 ./bin/xgift import-chrome       # macOS：从本机 Chrome 重新导入 X Cookie（过期时用）
 ```
 
+只读查价（不建单、不付款，走与下单相同的地区代理出口）：
+
+```sh
+# Premium+ 3 个月 / 6 个月 / 1 年，ID 来自 X 网页公开前端脚本的商品表
+# （BlueVerifiedPlus3Months / BlueVerifiedPlus6Months / BlueVerifiedPlus）
+./bin/xgift quote --product prod_TJXL297k753Zvb --product prod_TJcPqt9ypBzEFQ --product prod_QH6h8qsTyMQrnI
+./bin/xgift quote --product prod_QH6h8qsTyMQrnI --raw   # 额外打印完整响应体
+```
+
+输出每个商品的价格（`amount_local_micro`、最小单位金额、币种、类型）、响应里的名称类字段，以及可粘贴进目录的 `plans` 片段。价格随代理出口地区变化（默认孟加拉出口为 BDT）；`name` 仍需到 Stripe 结账页逐字确认。详见 [docs/premium-plus.md](docs/premium-plus.md)。给用户名为 `quote` 的账号下单请写 `@quote`。
+
 更新配置用 `put`（从标准输入读取新值）：
 
 ```sh

@@ -2,7 +2,7 @@
 
 本文说明 XGift 如何在原有 X Premium 赠送之外支持 **X Premium+** 赠送，以及运营者在上线前必须自行确认的事项。
 
-> **重要：仓库没有内置任何 Premium+ 商品 ID、价格或商品名。** 这些值只能由运营者登录 x.com 后从赠送页面的网络请求中读取并手动配置。下文标注「需实测」的地方，代码目前只是按 Premium 的行为推断，尚未经过真实订单验证。
+> **重要：仓库没有内置任何 Premium+ 价格或商品名，默认目录也不含 Premium+。** 下文给出的 Premium+ 商品 ID 来自 X 网页公开前端脚本，价格需用 `xgift quote` 在自己的部署上只读查询，商品名只能在 Stripe 结账页确认。下文标注「需实测」的地方，代码目前只是按 Premium 的行为推断，尚未经过真实订单验证。
 
 ## 1. 设计概览
 
@@ -48,6 +48,35 @@ X 的赠送流程对 Premium 与 Premium+ 是同一套内部接口：
 ### 可用时长需在页面上确认
 
 X 帮助中心与公开报道称官方赠送「目前仅提供年度（annual）Premium / Premium+」；而本仓库默认 Premium 目录使用的是 3/6 个月套餐（来自特定地区/币种的结账页）。两者并不一致，说明可选时长随地区、账号或时间而变。**请以你实际看到的赠送页为准**，只配置页面上真实存在且报价接口返回单一 `OneTime` 价格的时长。数据库允许 1–24 个月。
+
+## 2.1 用 `xgift quote` 只读查价（推荐，无需浏览器）
+
+网页上的赠送入口可能被 X 撤下或对某些账号不显示，但报价接口仍可读。`xgift quote` 使用部署机保管库里已有的 `cookies`、`api-auth` 和 `proxy`，启动与下单相同的内置 sing-box 地区出口，**只**发送一个 GET 查询 `useSubscriptionProductDetailsByRestIdQuery`（queryId `Se1Bp6zcNnuXYXRecV2qLA`，与下单前 `quote()` 完全相同的请求）。它不会调用资格查询、建单 mutation（`useOneTimePurchaseGiftMutation`）或任何 Stripe 接口；代码层有只读白名单守卫，误调用会在发出请求前被拒绝，并有单元测试覆盖。读失败沿用原有的重试/限流规则（429/5xx/403 最多 3 次，遵守 Retry-After），失败详情加密保存在 vault 的 `x-read-failure:*` 记录中。不占用 checkout 锁，可以在网站运行时执行。
+
+Premium+ 三个商品 ID 来自 X 网页公开前端脚本中的正式商品表（键名分别为 `BlueVerifiedPlus3Months`、`BlueVerifiedPlus6Months`、`BlueVerifiedPlus`）。同一张表里的 Premium 3/6 个月 ID 与本仓库默认目录一致，但 Premium+ 这三个 ID 尚无第二个公开来源印证，以查价结果为准：
+
+| 档位 | 时长 | 商品 ID |
+| --- | --- | --- |
+| Premium+ | 3 个月 | `prod_TJXL297k753Zvb` |
+| Premium+ | 6 个月 | `prod_TJcPqt9ypBzEFQ` |
+| Premium+ | 1 年（12 个月） | `prod_QH6h8qsTyMQrnI` |
+
+```sh
+./bin/xgift quote \
+  --product prod_TJXL297k753Zvb \
+  --product prod_TJcPqt9ypBzEFQ \
+  --product prod_QH6h8qsTyMQrnI
+# 需要看完整响应（只含响应体，不含任何请求头或 Cookie）时加 --raw
+./bin/xgift quote --product prod_QH6h8qsTyMQrnI --raw
+```
+
+`--db`、`--password-file`（或 `XGIFT_PASSWORD_FILE`）、`--port` 与其他命令相同。也可写成 `--product id1,id2`。注意：`xgift quote` 现在是命令；如果真要给用户名为 `quote` 的账号下单，请写 `xgift @quote ...`。
+
+每个商品会输出：`rest_id`；每个价格的 `amount_local_micro`、最小货币单位金额（`micro / 10000`，不能整除时会标出且不生成片段）、`currency_code`、`price_type`；以及响应中所有键名包含 name/title/description/label 的字符串字段。最后给出可直接粘贴进目录 `plans` 数组的片段（`tier`、`months`、`amount`、`product`），`name` 默认是 `"<fill from Stripe checkout>"`，只有响应顶层明确带有 `name` / `product_name` 时才会预填。**无论是否预填，`name` 都必须与 Stripe 结账页 line item 名称逐字核对后再写入**；`ParseCatalog` 会拒绝仍是 `<...>` 占位符的名称，避免误写入。
+
+**价格取决于代理出口所在地区。** 默认配置从孟加拉出口，返回的是 BDT（`currency_code` 为 `BDT`，目录写 `bdt`）。换了出口国家，币种和金额都会变；目录里所有套餐共用一个 `currency`，必须与下单时的出口一致。
+
+常见失败：HTTP 401/403 或 GraphQL `AuthorizationError` 表示未登录或 Cookie 过期（重新 `import-chrome` 或 `put --name cookies`）；HTTP 404 通常也是未登录 / Cookie 失效，或 X 更换了 queryId；响应里没有商品说明该 ID 在当前地区不可用或不存在。
 
 ## 3. 配置示例
 

@@ -40,7 +40,7 @@ func run() error {
 		a := args[i]
 		if strings.HasPrefix(a, "-") {
 			rest = append(rest, a)
-			if a == "--db" || a == "--password-file" || a == "--profile" || a == "--port" || a == "--name" || a == "--months" || a == "--tier" || a == "--last4" {
+			if a == "--db" || a == "--password-file" || a == "--profile" || a == "--port" || a == "--name" || a == "--months" || a == "--tier" || a == "--last4" || a == "--product" {
 				i++
 				if i >= len(args) {
 					return errors.New("missing flag value")
@@ -76,8 +76,11 @@ func run() error {
 	inspect := f.Bool("inspect", false, "read the existing Stripe order status without paying")
 	pay := f.Bool("pay", false, "pay only at the exact catalog plan total")
 	name := f.String("name", "", "secret name for put")
+	var products productList
+	f.Var(&products, "product", "quote: Stripe product ID (prod_...); repeatable")
+	rawQuote := f.Bool("raw", false, "quote: also print the full X response body JSON")
 	f.Usage = func() {
-		fmt.Fprintln(f.Output(), "Usage: xgift <setup|init|status|billing|cards|import-chrome|put|proxy|check|check-payment-outbounds|resume-payments|username> [flags]\nsetup is the interactive first-time wizard; init reads a JSON object from stdin; put reads one JSON value from stdin (stripe-key: the raw pk_live_ key; catalog: merchant/plan catalog JSON; payment-outbounds: an outbound array; cards: a card array). cards list|add|remove|unblock|rotate manages the encrypted payment card pool. check-payment-outbounds probes public endpoints without paying.")
+		fmt.Fprintln(f.Output(), "Usage: xgift <setup|init|status|billing|cards|import-chrome|put|proxy|check|check-payment-outbounds|resume-payments|quote|username> [flags]\nsetup is the interactive first-time wizard; init reads a JSON object from stdin; put reads one JSON value from stdin (stripe-key: the raw pk_live_ key; catalog: merchant/plan catalog JSON; payment-outbounds: an outbound array; cards: a card array). cards list|add|remove|unblock|rotate manages the encrypted payment card pool. check-payment-outbounds probes public endpoints without paying. quote --product prod_XXX [--product ...] [--raw] reads X's regional gift price through the configured proxy (read-only; never creates a checkout or pays). To gift the X user literally named \"quote\", write @quote.")
 		f.PrintDefaults()
 	}
 	if err := f.Parse(rest); err != nil {
@@ -92,6 +95,12 @@ func run() error {
 	}
 	if *port != 0 && (*port < 1024 || *port > 65535) {
 		return errors.New("port must be 1024..65535")
+	}
+	if command != "quote" && (len(products) > 0 || *rawQuote) {
+		return errors.New("--product and --raw are only valid with the quote command")
+	}
+	if command == "quote" && len(products) == 0 {
+		return errors.New("quote 需要至少一个 --product prod_XXXX")
 	}
 	if command == "setup" {
 		return runSetup(context.Background(), *db, *key)
@@ -326,10 +335,12 @@ func run() error {
 			return errors.New("--name must be proxy, payment-outbounds, card, cards, cookies, api-auth, stripe-key or catalog")
 		}
 	}
-	if command != "proxy" && command != "check" && !regexp.MustCompile(`^@?[A-Za-z0-9_]{1,15}$`).MatchString(command) {
+	if command != "proxy" && command != "check" && command != "quote" && !regexp.MustCompile(`^@?[A-Za-z0-9_]{1,15}$`).MatchString(command) {
 		return errors.New("invalid command or X username")
 	}
-	if command != "proxy" && command != "check" {
+	// quote is read-only (one GET query), so like check it does not take the
+	// checkout lock and may run while the web service is processing orders.
+	if command != "proxy" && command != "check" && command != "quote" {
 		lock, e := os.OpenFile(filepath.Join(filepath.Dir(*db), "checkout.lock"), os.O_CREATE|os.O_RDWR, 0600)
 		if e != nil {
 			return e
@@ -372,6 +383,12 @@ func run() error {
 	}
 	if command == "check" {
 		return proxy.Check(ctx, *port)
+	}
+	if command == "quote" {
+		port := *port
+		return runQuote(ctx, os.Stdout, products, *rawQuote, func(ctx context.Context, ids []string) ([]checkout.ProductQuote, error) {
+			return checkout.QuoteProducts(ctx, v, port, ids)
+		})
 	}
 	tier, ok := checkout.ParseTier(*tierFlag)
 	if !ok {
