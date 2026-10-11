@@ -157,33 +157,33 @@ func (x *xClient) checkCreation(ctx context.Context, now time.Time) error {
 
 // PublicCheckoutWindow identifies only a public order; private payment records
 // are never exposed through this queue optimization.
-func PublicCheckoutWindow(v *vault.Vault, now time.Time) (string, int, time.Time, error) {
+func PublicCheckoutWindow(v *vault.Vault, now time.Time) (string, Tier, int, time.Time, error) {
 	a, err := readActiveCheckout(v)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", 0, time.Time{}, nil
+		return "", "", 0, time.Time{}, nil
 	}
 	if err != nil {
-		return "", 0, time.Time{}, err
+		return "", "", 0, time.Time{}, err
 	}
 	if a.Released || a.ExpiresAt <= now.UnixMilli() || a.Order.CardFingerprint != "" || !unsubmitted(&a.Order) {
-		return "", 0, time.Time{}, nil
+		return "", "", 0, time.Time{}, nil
 	}
 	b, err := v.Get("public-checkout:" + a.Order.RecipientID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", 0, time.Time{}, nil
+		return "", "", 0, time.Time{}, nil
 	}
 	if err != nil {
-		return "", 0, time.Time{}, err
+		return "", "", 0, time.Time{}, err
 	}
 	defer clear(b)
 	var saved publicLinkRecord
 	if err = json.Unmarshal(b, &saved); err != nil {
-		return "", 0, time.Time{}, err
+		return "", "", 0, time.Time{}, err
 	}
 	if saved.Order.SessionID != a.Order.SessionID {
-		return "", 0, time.Time{}, nil
+		return "", "", 0, time.Time{}, nil
 	}
-	return a.Order.Username, a.Order.Months, time.UnixMilli(a.ExpiresAt), nil
+	return a.Order.Username, a.Order.PlanTier(), a.Order.Months, time.UnixMilli(a.ExpiresAt), nil
 }
 
 func (x *xClient) checkoutPaid(ctx context.Context, r *Record, p Plan) (bool, error) {

@@ -52,7 +52,7 @@ func (s *server) publicOrderStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now()
 	state := "ended"
-	result := map[string]any{"username": order.Username, "months": order.Months, "created": order.Created}
+	result := map[string]any{"username": order.Username, "tier": order.PlanTier(), "tier_label": order.PlanTier().Label(), "months": order.Months, "created": order.Created}
 	switch {
 	case order.Status == "succeeded":
 		state = "paid"

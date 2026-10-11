@@ -15,17 +15,27 @@ import (
 )
 
 type Plan struct {
+	Tier          Tier
 	Months, Minor int
 	ProductID     string
-	Merchant      string
-	Currency      string
+	// ProductName is the configured exact Stripe product name; empty means
+	// the tier's default naming (only allowed for Premium).
+	ProductName string
+	Merchant    string
+	Currency    string
 }
 
-var ErrNotEligible = errors.New("recipient cannot receive Premium gifts")
+var ErrNotEligible = errors.New("recipient cannot receive gifts")
 var ErrUserNotFound = errors.New("recipient was not found")
 var ErrXReadFailure = errors.New("X account or price query failed")
 
 // Eligibility is read-only: it neither creates a checkout nor submits a payment.
+//
+// TODO(premium-plus): X only exposes premium_gifting_eligible here. It is used
+// for both Premium and Premium+ gifts, but it has NOT been verified that the
+// same flag gates Premium+ gifting (e.g. a recipient who already has Premium
+// may be eligible for Premium+ or vice versa). Verify against x.com before
+// relying on it for Premium+; see docs/premium-plus.md.
 func Eligibility(ctx context.Context, v *vault.Vault, user string, port int) (string, error) {
 	c, err := newXClient(v, port)
 	if err != nil {
@@ -35,7 +45,22 @@ func Eligibility(ctx context.Context, v *vault.Vault, user string, port int) (st
 	return c.recipient(ctx, user)
 }
 
-func (p Plan) Name() string { return fmt.Sprintf("Premium Gift - %d months", p.Months) }
+// Name is the exact Stripe product / line-item name the payment guard expects.
+// A configured name always wins. Premium keeps X's historical naming; the
+// Premium+ fallback is only a placeholder because ParseCatalog requires an
+// explicit name for premium_plus plans.
+func (p Plan) Name() string {
+	if p.ProductName != "" {
+		return p.ProductName
+	}
+	if p.Tier.Normalize() == TierPremiumPlus {
+		return fmt.Sprintf("Premium+ Gift - %d months", p.Months)
+	}
+	return fmt.Sprintf("Premium Gift - %d months", p.Months)
+}
+
+// Label is the user-facing tier label (Premium / Premium+).
+func (p Plan) Label() string { return p.Tier.Label() }
 
 type xClient struct {
 	// Set only after validating an explicitly replaced public order.
@@ -46,6 +71,57 @@ type xClient struct {
 	headers           http.Header
 	readCheckout      func(context.Context, *Record) (*paymentPage, error)
 	readCheckoutPaid  func(context.Context, *Record, Plan) (bool, error)
+	// readOnlyOps, when non-nil, restricts this client to the listed
+	// non-mutation operations. Any mutation or other operation is refused
+	// before a request is built (used by `xgift quote`).
+	readOnlyOps map[string]bool
+}
+
+// ErrReadOnlyViolation reports that a read-only client was asked to send a
+// mutation or an operation outside its allow-list. No request was sent.
+var ErrReadOnlyViolation = errors.New("read-only X client refused a non-allowed operation; no request sent")
+
+// XHTTPStatusError carries the HTTP status of a failed X GraphQL call.
+type XHTTPStatusError struct {
+	Status int
+	msg    string
+}
+
+func (e *XHTTPStatusError) Error() string { return e.msg }
+
+// XGraphQLError reports GraphQL-level errors (HTTP 200 with an errors array).
+// Messages are X's own error texts; they never include request headers.
+type XGraphQLError struct {
+	Operation string
+	Messages  []string
+}
+
+func (e *XGraphQLError) Error() string {
+	return fmt.Sprintf("X %s rejected the operation", e.Operation)
+}
+
+func graphQLMessages(errs []json.RawMessage) []string {
+	var out []string
+	for _, raw := range errs {
+		if len(out) == 3 {
+			break
+		}
+		var e struct {
+			Message string `json:"message"`
+			Name    string `json:"name"`
+		}
+		if json.Unmarshal(raw, &e) != nil {
+			continue
+		}
+		m := strings.TrimSpace(strings.Join(strings.Fields(e.Name+" "+e.Message), " "))
+		if len(m) > 200 {
+			m = m[:200]
+		}
+		if m != "" {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 func newXClient(v *vault.Vault, port int) (*xClient, error) {
@@ -105,12 +181,18 @@ func (c *xClient) close() {
 	}
 }
 func (c *xClient) call(ctx context.Context, user, name, id string, variables any, mutation bool, out any) error {
+	if c.readOnlyOps != nil && (mutation || !c.readOnlyOps[name]) {
+		return ErrReadOnlyViolation
+	}
 	if mutation {
 		return c.callOnce(ctx, user, name, id, variables, true, out)
 	}
 	return retrySafe(ctx, func() error { return c.callOnce(ctx, user, name, id, variables, false, out) })
 }
 func (c *xClient) callOnce(ctx context.Context, user, name, id string, variables any, mutation bool, out any) (callErr error) {
+	if c.readOnlyOps != nil && (mutation || !c.readOnlyOps[name]) {
+		return ErrReadOnlyViolation
+	}
 	// A fixed-operation audit is encrypted before sending, then completed even on
 	// transport/body failures. Never store request headers or cookies here.
 	var audit struct {
@@ -139,7 +221,7 @@ func (c *xClient) callOnce(ctx context.Context, user, name, id string, variables
 			}
 			b, err := json.Marshal(audit)
 			defer clear(b)
-			if err != nil || c.vault.Put(fmt.Sprintf("x-read-failure:%s:%s:%d", user, name, time.Now().UnixNano()), b) != nil {
+			if err != nil || c.vault.Put(fmt.Sprintf("x-read-failure:%s:%s:%d", auditUser(user), name, time.Now().UnixNano()), b) != nil {
 				callErr = fmt.Errorf("%w: could not preserve failure details", ErrXReadFailure)
 				return
 			}
@@ -188,7 +270,11 @@ func (c *xClient) callOnce(ctx context.Context, user, name, id string, variables
 		return e
 	}
 	req.Header = c.headers.Clone()
-	req.Header.Set("Referer", "https://x.com/"+user+"/gift-premium")
+	if user != "" {
+		req.Header.Set("Referer", "https://x.com/"+user+"/gift-premium")
+	} else {
+		req.Header.Set("Referer", "https://x.com/")
+	}
 	client := c.http
 	if mutation || name == "useSubscriptionProductDetailsByRestIdQuery" {
 		if c.regionalHTTP == nil {
@@ -221,7 +307,7 @@ func (c *xClient) callOnce(ctx context.Context, user, name, id string, variables
 	}
 	audit.Phase = "response_validation"
 	if res.StatusCode != 200 {
-		return xHTTPFailure(fmt.Errorf("X %s returned HTTP %d; no payment attempted", name, res.StatusCode), res.StatusCode, res.Header.Get("Retry-After"), mutation)
+		return xHTTPFailure(&XHTTPStatusError{Status: res.StatusCode, msg: fmt.Sprintf("X %s returned HTTP %d; no payment attempted", name, res.StatusCode)}, res.StatusCode, res.Header.Get("Retry-After"), mutation)
 	}
 	var envelope struct {
 		Errors []json.RawMessage `json:"errors"`
@@ -230,7 +316,7 @@ func (c *xClient) callOnce(ctx context.Context, user, name, id string, variables
 		return errors.New("X returned non-JSON data")
 	}
 	if len(envelope.Errors) > 0 {
-		return fmt.Errorf("X %s rejected the operation", name)
+		return &XGraphQLError{Operation: name, Messages: graphQLMessages(envelope.Errors)}
 	}
 	if e = json.Unmarshal(raw, out); e != nil {
 		return e
@@ -257,8 +343,9 @@ func (c *xClient) identity(ctx context.Context, user string, requireEligible boo
 		Data struct {
 			User struct {
 				Result struct {
-					ID       string `json:"rest_id"`
-					Eligible bool   `json:"premium_gifting_eligible"`
+					ID string `json:"rest_id"`
+					// TODO(premium-plus): verify this flag also governs Premium+ gifts.
+					Eligible bool `json:"premium_gifting_eligible"`
 					Core     struct {
 						Screen string `json:"screen_name"`
 					} `json:"core"`
@@ -308,6 +395,9 @@ func (c *xClient) quote(ctx context.Context, user string, p Plan) error {
 	return nil
 }
 func (c *xClient) create(ctx context.Context, user, recipient string, p Plan) (string, string, error) {
+	if c.readOnlyOps != nil {
+		return "", "", ErrReadOnlyViolation
+	}
 	if err := c.checkCreation(ctx, time.Now()); err != nil {
 		return "", "", err
 	}
@@ -338,4 +428,11 @@ func (c *xClient) create(ctx context.Context, user, recipient string, p Plan) (s
 		return "", "", errors.New("X checkout URL is unsupported or does not match its session; payment was not submitted")
 	}
 	return s.ID, s.URL, nil
+}
+
+func auditUser(user string) string {
+	if user == "" {
+		return "-"
+	}
+	return user
 }

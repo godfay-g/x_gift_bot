@@ -4,17 +4,25 @@
 // unary := ('not'|'!'|'非') unary | factor（补集，可叠加，not not X = X）；
 // factor := '(' expr ')' | condition；
 // condition := field (':'|'='|'!='|'≠') value。
-// 字段：folder、status、months、username；字段与运算符不区分大小写。
+// 字段：folder、status、months、tier、username；字段与运算符不区分大小写。
 
 export type CodeRow = {
   batch: string;
   status: string;
   months?: number;
+  tier?: string;
   username?: string;
 };
 
 const STATUSES = ["active", "processing", "review", "succeeded", "revoked"];
-const FIELDS = ["folder", "status", "months", "username"] as const;
+const FIELDS = ["folder", "status", "months", "tier", "username"] as const;
+// tier 值：premium / premium_plus（也接受 plus、premium+）；缺省档位视为 premium。
+const TIER_ALIASES: Record<string, string> = {
+  premium: "premium",
+  premium_plus: "premium_plus",
+  "premium+": "premium_plus",
+  plus: "premium_plus",
+};
 type Field = (typeof FIELDS)[number];
 
 type Token =
@@ -223,7 +231,7 @@ function parse(src: string): { root: Node; flat: ExpressionToken[] } {
     const field = next()!;
     if (field.kind !== "word")
       throw new Error(
-        "无法识别的条件：请使用 folder:批次名、status:状态、months:时长或 username:账号。",
+        "无法识别的条件：请使用 folder:批次名、status:状态、months:时长、tier:档位或 username:账号。",
       );
     const name = field.text.toLowerCase() as Field;
     if (!FIELDS.includes(name))
@@ -258,6 +266,12 @@ function parse(src: string): { root: Node; flat: ExpressionToken[] } {
       if (!/^\d+$/.test(value.text))
         throw new Error(
           `「months:」后需要数字（如 3、6），收到「${value.text}」。`,
+        );
+    } else if (name === "tier") {
+      normalized = TIER_ALIASES[value.text.toLowerCase()] ?? "";
+      if (!normalized)
+        throw new Error(
+          `不支持的档位「${value.text}」，可用：premium、premium_plus。`,
         );
     } else if (name === "folder") {
       if (!value.text)
@@ -333,6 +347,9 @@ export function parseFilter(src: string): (code: CodeRow) => boolean {
           case "months":
             matched = code.months === Number(node.value);
             break;
+          case "tier":
+            matched = (code.tier || "premium") === node.value;
+            break;
           case "username":
             matched =
               node.value === "-" && !node.literal
@@ -354,4 +371,4 @@ export function parseExpressionTokens(src: string): ExpressionToken[] {
 }
 
 export const FILTER_HINT =
-  "条件：folder:批次名、status:状态、months:时长、username:账号；逻辑：and、or、not、括号；!= 取反；folder:- 未分类、username:- 未绑定；名称含空格、冒号或保留字时用英文引号包裹，如 folder:\"and\"。";
+  "条件：folder:批次名、status:状态、months:时长、tier:档位（premium / premium_plus）、username:账号；逻辑：and、or、not、括号；!= 取反；folder:- 未分类、username:- 未绑定；名称含空格、冒号或保留字时用英文引号包裹，如 folder:\"and\"。";

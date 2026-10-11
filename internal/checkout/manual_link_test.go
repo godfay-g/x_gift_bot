@@ -14,7 +14,7 @@ func TestManualLinkUnpaidCheckboxCannotOverrideUnknownPayment(t *testing.T) {
 	v.Put("checkout:1234", b)
 	// Deliberately no valid confirmation proof or Stripe credentials. Even an
 	// operator checkbox must never erase the pending order to create a new one.
-	if _, err := manualLinkForRecipient(context.Background(), v, "recipient", "1234", 0, 6, true); err == nil {
+	if _, err := manualLinkForRecipient(context.Background(), v, "recipient", "1234", 0, TierPremium, 6, true); err == nil {
 		t.Fatal("unverified payment accepted")
 	}
 	after, _ := v.Get("checkout:1234")

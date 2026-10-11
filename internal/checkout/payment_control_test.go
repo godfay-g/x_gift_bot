@@ -75,7 +75,7 @@ func TestDeclinePersistsDetailsAndStopsPolling(t *testing.T) {
 	if err = v.Put("catalog", []byte(`{"merchant":"acct_Test","currency":"usd","plans":[{"months":3,"amount":30000,"product":"prod_TEST3MO"}]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = ResumeForRecipient(context.Background(), v, "recipient", "1234", 0, 3); !errors.Is(err, ErrPaymentDeclined) {
+	if _, err = ResumeForRecipient(context.Background(), v, "recipient", "1234", 0, TierPremium, 3); !errors.Is(err, ErrPaymentDeclined) {
 		t.Fatalf("declined order could be resumed: %v", err)
 	}
 }

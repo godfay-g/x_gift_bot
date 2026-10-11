@@ -40,7 +40,7 @@ func run() error {
 		a := args[i]
 		if strings.HasPrefix(a, "-") {
 			rest = append(rest, a)
-			if a == "--db" || a == "--password-file" || a == "--profile" || a == "--port" || a == "--name" || a == "--months" || a == "--last4" {
+			if a == "--db" || a == "--password-file" || a == "--profile" || a == "--port" || a == "--name" || a == "--months" || a == "--tier" || a == "--last4" || a == "--product" {
 				i++
 				if i >= len(args) {
 					return errors.New("missing flag value")
@@ -70,13 +70,17 @@ func run() error {
 	profile := f.String("profile", "Default", "Chrome directory name")
 	port := f.Int("port", 0, "local proxy port; default automatic (proxy command: 18791)")
 	months := f.Int("months", 6, "gift duration in months; must match a plan in the catalog record")
+	tierFlag := f.String("tier", "premium", "gift tier: premium or premium_plus; with --months must match a catalog plan")
 	last4 := f.String("last4", "", "card tail for cards remove")
 	retire := f.Bool("retire-canceled", false, "archive an inactive, canceled, unpaid order after read-only verification")
 	inspect := f.Bool("inspect", false, "read the existing Stripe order status without paying")
 	pay := f.Bool("pay", false, "pay only at the exact catalog plan total")
 	name := f.String("name", "", "secret name for put")
+	var products productList
+	f.Var(&products, "product", "quote: Stripe product ID (prod_...); repeatable")
+	rawQuote := f.Bool("raw", false, "quote: also print the full X response body JSON")
 	f.Usage = func() {
-		fmt.Fprintln(f.Output(), "Usage: xgift <setup|init|status|billing|cards|import-chrome|put|proxy|check|check-payment-outbounds|resume-payments|username> [flags]\nsetup is the interactive first-time wizard; init reads a JSON object from stdin; put reads one JSON value from stdin (stripe-key: the raw pk_live_ key; catalog: merchant/plan catalog JSON; payment-outbounds: an outbound array; cards: a card array). cards list|add|remove|unblock|rotate manages the encrypted payment card pool. check-payment-outbounds probes public endpoints without paying.")
+		fmt.Fprintln(f.Output(), "Usage: xgift <setup|init|status|billing|cards|import-chrome|put|proxy|check|check-payment-outbounds|resume-payments|quote|username> [flags]\nsetup is the interactive first-time wizard; init reads a JSON object from stdin; put reads one JSON value from stdin (stripe-key: the raw pk_live_ key; catalog: merchant/plan catalog JSON; payment-outbounds: an outbound array; cards: a card array). cards list|add|remove|unblock|rotate manages the encrypted payment card pool. check-payment-outbounds probes public endpoints without paying. quote --product prod_XXX [--product ...] [--raw] reads X's regional gift price through the configured proxy (read-only; never creates a checkout or pays). To gift the X user literally named \"quote\", write @quote.")
 		f.PrintDefaults()
 	}
 	if err := f.Parse(rest); err != nil {
@@ -91,6 +95,12 @@ func run() error {
 	}
 	if *port != 0 && (*port < 1024 || *port > 65535) {
 		return errors.New("port must be 1024..65535")
+	}
+	if command != "quote" && (len(products) > 0 || *rawQuote) {
+		return errors.New("--product and --raw are only valid with the quote command")
+	}
+	if command == "quote" && len(products) == 0 {
+		return errors.New("quote 需要至少一个 --product prod_XXXX")
 	}
 	if command == "setup" {
 		return runSetup(context.Background(), *db, *key)
@@ -240,10 +250,14 @@ func run() error {
 		}
 		clear(key)
 		fmt.Println("stripe-key: encrypted record verified")
-		if _, e = checkout.ReadCatalog(v); e != nil {
+		cat, e := checkout.ReadCatalog(v)
+		if e != nil {
 			return e
 		}
 		fmt.Println("catalog: encrypted record verified")
+		for _, p := range cat.Plans {
+			fmt.Printf("  plan: tier=%s months=%d\n", p.Tier.Normalize(), p.Months)
+		}
 		return nil
 	case "import-chrome":
 		b, e := chrome.Extract(*profile)
@@ -321,10 +335,12 @@ func run() error {
 			return errors.New("--name must be proxy, payment-outbounds, card, cards, cookies, api-auth, stripe-key or catalog")
 		}
 	}
-	if command != "proxy" && command != "check" && !regexp.MustCompile(`^@?[A-Za-z0-9_]{1,15}$`).MatchString(command) {
+	if command != "proxy" && command != "check" && command != "quote" && !regexp.MustCompile(`^@?[A-Za-z0-9_]{1,15}$`).MatchString(command) {
 		return errors.New("invalid command or X username")
 	}
-	if command != "proxy" && command != "check" {
+	// quote is read-only (one GET query), so like check it does not take the
+	// checkout lock and may run while the web service is processing orders.
+	if command != "proxy" && command != "check" && command != "quote" {
 		lock, e := os.OpenFile(filepath.Join(filepath.Dir(*db), "checkout.lock"), os.O_CREATE|os.O_RDWR, 0600)
 		if e != nil {
 			return e
@@ -368,16 +384,26 @@ func run() error {
 	if command == "check" {
 		return proxy.Check(ctx, *port)
 	}
+	if command == "quote" {
+		port := *port
+		return runQuote(ctx, os.Stdout, products, *rawQuote, func(ctx context.Context, ids []string) ([]checkout.ProductQuote, error) {
+			return checkout.QuoteProducts(ctx, v, port, ids)
+		})
+	}
+	tier, ok := checkout.ParseTier(*tierFlag)
+	if !ok {
+		return errors.New("--tier must be premium or premium_plus")
+	}
 	if *inspect {
-		return checkout.Inspect(ctx, v, command, *port, *months)
+		return checkout.Inspect(ctx, v, command, *port, tier, *months)
 	}
 	if *retire {
 		if *pay {
 			return errors.New("--retire-canceled cannot be combined with --pay")
 		}
-		return checkout.RetireCanceled(ctx, v, command, *port, *months)
+		return checkout.RetireCanceled(ctx, v, command, *port, tier, *months)
 	}
-	result, e := checkout.Run(ctx, v, command, *pay, *port, *months)
+	result, e := checkout.Run(ctx, v, command, *pay, *port, tier, *months)
 	if result != nil {
 		if e == nil || result.Status == "requires_action" || result.Status == "unknown" || result.Status == "submitting" {
 			fmt.Println(result.URL)

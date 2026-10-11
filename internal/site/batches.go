@@ -40,8 +40,7 @@ func migrateBatches(db *sql.DB) error {
 			return err
 		}
 	}
-	if _, err = tx.Exec(`CREATE TRIGGER IF NOT EXISTS batch_rename AFTER UPDATE OF name ON folders BEGIN UPDATE codes SET batch=NEW.name WHERE folder_id=NEW.id; END;
- CREATE TRIGGER IF NOT EXISTS batch_move AFTER UPDATE OF folder_id ON codes BEGIN UPDATE codes SET batch=COALESCE((SELECT name FROM folders WHERE id=NEW.folder_id),'') WHERE id=NEW.id; END;`); err != nil {
+	if _, err = tx.Exec(batchTriggers); err != nil {
 		return err
 	}
 	return tx.Commit()

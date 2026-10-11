@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { Alert, Box, Button, Card, CardContent, Divider, LinearProgress, Stack, Step, StepLabel, Stepper, Typography } from "@mui/material";
 import ScheduleRounded from "@mui/icons-material/ScheduleRounded";
 import LockOutlined from "@mui/icons-material/LockOutlined";
+import { giftLabel } from "./tier";
 
 export type QueueProgress = {
   status: "submitting" | "queued" | "processing";
@@ -9,10 +10,11 @@ export type QueueProgress = {
   estimated_wait_seconds?: number;
 };
 
-export function PaymentQueueCard({ progress, username, months, price, onCancel, cancelling, reconnecting, onNotify, notifyReady }: {
+export function PaymentQueueCard({ progress, username, months, tier, price, onCancel, cancelling, reconnecting, onNotify, notifyReady }: {
   progress: QueueProgress;
   username: string;
   months: number;
+  tier?: string;
   price: string;
   onCancel?: () => void;
   cancelling?: boolean;
@@ -76,7 +78,7 @@ export function PaymentQueueCard({ progress, username, months, price, onCancel, 
         <Divider sx={{ mb: 2 }} />
         <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={0.5}>
           <Typography variant="body2" fontWeight={600} sx={{ overflowWrap: "anywhere" }}>@{username}</Typography>
-          <Typography variant="body2" color="text.secondary">{months} 个月 Premium · {price}</Typography>
+          <Typography variant="body2" color="text.secondary">{giftLabel(tier, months)} · {price}</Typography>
         </Stack>
         <Stack direction="row" spacing={0.75} alignItems="flex-start" sx={{ mt: 2 }}>
           <LockOutlined sx={{ fontSize: 16, color: "text.secondary", mt: "3px" }} aria-hidden="true" />

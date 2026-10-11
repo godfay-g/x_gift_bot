@@ -69,6 +69,7 @@ type codeRow struct {
 	Hint        string `json:"hint"`
 	Batch       string `json:"batch"`
 	Months      int    `json:"months"`
+	Tier        string `json:"tier"`
 	Status      string `json:"status"`
 	Progress    int    `json:"progress"`
 	RecipientID string `json:"-"`
@@ -351,6 +352,9 @@ func openSiteDB(dbpath string) (*sql.DB, error) {
 	if err = migrateBatches(db); err != nil {
 		return nil, err
 	}
+	if err = migrateCodeTiers(db); err != nil {
+		return nil, err
+	}
 	// A crash is never interpreted as permission to submit the same payment again.
 	if _, err = db.Exec("UPDATE codes SET status='review',message=?,updated=? WHERE status='processing'", "订单处理被中断，请查询原订单或联系管理员核实；请勿重复兑换。", time.Now().Unix()); err != nil {
 		return nil, err
@@ -534,7 +538,7 @@ func (s *server) admin(next http.HandlerFunc) http.HandlerFunc {
 }
 func (s *server) find(code string) (codeRow, error) {
 	var c codeRow
-	e := s.db.QueryRow("SELECT id,hint,batch,months,status,username,message,created,updated,progress,COALESCE(recipient_id,'') FROM codes WHERE hash=?", hash(code)).Scan(&c.ID, &c.Hint, &c.Batch, &c.Months, &c.Status, &c.Username, &c.Message, &c.Created, &c.Updated, &c.Progress, &c.RecipientID)
+	e := s.db.QueryRow("SELECT id,hint,batch,months,tier,status,username,message,created,updated,progress,COALESCE(recipient_id,'') FROM codes WHERE hash=?", hash(code)).Scan(&c.ID, &c.Hint, &c.Batch, &c.Months, &c.Tier, &c.Status, &c.Username, &c.Message, &c.Created, &c.Updated, &c.Progress, &c.RecipientID)
 	return c, e
 }
 func readInput(w http.ResponseWriter, r *http.Request) (string, string, bool) {
@@ -566,7 +570,7 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	if c.Status == "review" {
 		s.reconcileStatus(r.Context(), &c)
 	}
-	reply(w, 200, map[string]any{"status": c.Status, "months": c.Months, "message": c.Message, "progress": c.Progress, "rechecking": s.autoChecking(&c), "payment_declined": s.paymentDeclined(&c)})
+	reply(w, 200, map[string]any{"status": c.Status, "months": c.Months, "tier": codeTier(c.Tier), "tier_label": codeTier(c.Tier).Label(), "message": c.Message, "progress": c.Progress, "rechecking": s.autoChecking(&c), "payment_declined": s.paymentDeclined(&c)})
 }
 
 // check is a read-only eligibility probe: no code lookup, no checkout, no writes.
@@ -597,7 +601,9 @@ func (s *server) check(w http.ResponseWriter, r *http.Request) {
 	if e != nil {
 		switch {
 		case errors.Is(e, checkout.ErrNotEligible):
-			reply(w, 200, map[string]any{"eligible": false, "message": "X 当前不允许向这个账号赠送 Premium。"})
+			// The probe is not tied to a code; premium_gifting_eligible is the
+			// only signal X exposes (TODO(premium-plus): verify for Premium+).
+			reply(w, 200, map[string]any{"eligible": false, "message": "X 当前不允许向这个账号赠送会员（Premium / Premium+）。"})
 		case errors.Is(e, checkout.ErrUserNotFound):
 			reply(w, 200, map[string]any{"eligible": false, "message": "未能找到这个 X 账号，请检查用户名。"})
 		default:
@@ -626,10 +632,15 @@ func (s *server) redeem(w http.ResponseWriter, r *http.Request) {
 		message(w, 503, "服务暂时不可用，兑换码未使用。")
 		return
 	}
+	tier, validTier := checkout.ParseTier(c.Tier)
+	if !validTier {
+		message(w, 409, "兑换码套餐无效，请联系提供方。兑换码未使用。")
+		return
+	}
 	resuming := c.Status == "review" && c.Username == user && c.RecipientID != ""
 	if c.Status != "active" && !resuming {
 		if c.Username == user && (c.Status == "processing" || c.Status == "review" || c.Status == "succeeded") {
-			reply(w, 200, map[string]any{"status": c.Status, "message": c.Message, "months": c.Months, "progress": c.Progress, "rechecking": s.autoChecking(&c)})
+			reply(w, 200, map[string]any{"status": c.Status, "message": c.Message, "months": c.Months, "tier": codeTier(c.Tier), "tier_label": codeTier(c.Tier).Label(), "progress": c.Progress, "rechecking": s.autoChecking(&c)})
 			return
 		}
 		message(w, 409, "兑换码已使用或已停用，请联系提供方。")
@@ -643,7 +654,7 @@ func (s *server) redeem(w http.ResponseWriter, r *http.Request) {
 		if e != nil {
 			switch {
 			case errors.Is(e, checkout.ErrNotEligible):
-				message(w, 422, "X 当前不允许向这个账号赠送 Premium。兑换码未使用，可换一个符合条件的账号。")
+				message(w, 422, "X 当前不允许向这个账号赠送 "+codeTier(c.Tier).Label()+"。兑换码未使用，可换一个符合条件的账号。")
 			case errors.Is(e, checkout.ErrUserNotFound):
 				message(w, 422, "未能找到这个 X 账号，请检查用户名。兑换码未使用。")
 			default:
@@ -676,7 +687,7 @@ func (s *server) redeem(w http.ResponseWriter, r *http.Request) {
 	}
 	var result sql.Result
 	if resuming {
-		result, e = s.db.Exec("UPDATE codes SET status='processing',progress=20,message=?,updated=? WHERE id=? AND status='review' AND username=? AND recipient_id=? AND months=?", "正在重新检查原订单，请稍候。", time.Now().Unix(), c.ID, user, recipient, c.Months)
+		result, e = s.db.Exec("UPDATE codes SET status='processing',progress=20,message=?,updated=? WHERE id=? AND status='review' AND username=? AND recipient_id=? AND months=? AND tier=?", "正在重新检查原订单，请稍候。", time.Now().Unix(), c.ID, user, recipient, c.Months, c.Tier)
 	} else {
 		result, e = s.db.Exec("UPDATE codes SET status='processing',progress=20,username=?,recipient_id=?,message=?,updated=? WHERE id=? AND status='active'", user, recipient, "正在处理，请不要重复提交。", time.Now().Unix(), c.ID)
 	}
@@ -704,27 +715,27 @@ func (s *server) redeem(w http.ResponseWriter, r *http.Request) {
 		var record *checkout.Record
 		var err error
 		if resuming {
-			record, err = checkout.ResumeForRecipient(ctx, s.vault, user, recipient, s.port, c.Months)
+			record, err = checkout.ResumeForRecipient(ctx, s.vault, user, recipient, s.port, tier, c.Months)
 		} else {
-			record, err = checkout.RunForRecipient(ctx, s.vault, user, recipient, true, s.port, c.Months)
+			record, err = checkout.RunForRecipient(ctx, s.vault, user, recipient, true, s.port, tier, c.Months)
 		}
 		if err != nil {
 			stage := "before_order"
 			if record != nil {
 				stage = record.Status
 			}
-			failure, marshalErr := json.Marshal(map[string]any{"code_id": c.ID, "recipient_id": recipient, "months": c.Months, "stage": stage, "error": err.Error(), "observed_at": time.Now().Unix()})
+			failure, marshalErr := json.Marshal(map[string]any{"code_id": c.ID, "recipient_id": recipient, "tier": tier, "months": c.Months, "stage": stage, "error": err.Error(), "observed_at": time.Now().Unix()})
 			if marshalErr != nil || s.vault.Put(fmt.Sprintf("redemption-failure:%s:%d", c.ID, time.Now().UnixNano()), failure) != nil {
 				log.Printf("order %s failure details could not be persisted", c.ID)
 			}
 			clear(failure)
 			log.Printf("order %s stopped at stage %s; upstream details remain encrypted", c.ID, stage)
 		}
-		status, msg := "review", redeemMessage(record, err)
-		if err == nil && record != nil && record.Status == "succeeded" && record.RecipientID == recipient && record.Months == c.Months {
-			plan, planErr := s.catalogPlan(c.Months)
-			if planErr == nil && record.Amount == plan.Minor && record.Currency == strings.ToUpper(plan.Currency) {
-				status, msg = "succeeded", fmt.Sprintf("已为 @%s 完成 %d 个月 Premium 赠送。", user, c.Months)
+		status, msg := "review", redeemMessage(record, err, tier)
+		if err == nil && record != nil && record.Status == "succeeded" && record.RecipientID == recipient && record.Months == c.Months && record.PlanTier() == tier {
+			plan, planErr := s.catalogPlan(tier, c.Months)
+			if planErr == nil && record.Amount == plan.Minor && record.Currency == strings.ToUpper(plan.Currency) && record.ProductID == plan.ProductID {
+				status, msg = "succeeded", fmt.Sprintf("已为 @%s 完成 %s 赠送。", user, checkout.GiftDescription(tier, c.Months))
 			}
 		}
 		updated, e := s.db.Exec("UPDATE codes SET status=?,message=?,updated=?,progress=CASE WHEN ?='succeeded' THEN 100 ELSE progress END WHERE id=? AND status='processing'", status, msg, time.Now().Unix(), status, c.ID)
@@ -740,11 +751,11 @@ func (s *server) redeem(w http.ResponseWriter, r *http.Request) {
 		// Never log the checkout URL, credentials or upstream payloads.
 		log.Printf("order %s finished: %s", c.ID, status)
 	}()
-	reply(w, 202, map[string]any{"status": "processing", "progress": 20, "months": c.Months, "message": "正在处理，请保留本页并等待结果。"})
+	reply(w, 202, map[string]any{"status": "processing", "progress": 20, "months": c.Months, "tier": tier, "tier_label": tier.Label(), "message": "正在处理，请保留本页并等待结果。"})
 }
 
 // redeemMessage explains an unfinished redemption; payment state wins over errors.
-func redeemMessage(record *checkout.Record, err error) string {
+func redeemMessage(record *checkout.Record, err error, tier checkout.Tier) string {
 	switch {
 	case errors.Is(err, checkout.ErrPaymentPaused):
 		return "充值已自动暂停，原订单已保留。请联系管理员处理付款方式。"
@@ -755,7 +766,7 @@ func redeemMessage(record *checkout.Record, err error) string {
 	case errors.Is(err, checkout.ErrXReadFailure):
 		return "暂时无法向 X 核实账号或套餐，本次未提交付款。请稍后点击「重新检查并继续兑换」。"
 	case errors.Is(err, checkout.ErrNotEligible):
-		return "X 当前不允许该账号接收 Premium 赠送，本次未提交付款。账号符合条件后，可重新检查并继续兑换。"
+		return "X 当前不允许该账号接收 " + tier.Label() + " 赠送，本次未提交付款。账号符合条件后，可重新检查并继续兑换。"
 	case errors.Is(err, checkout.ErrUserNotFound):
 		return "未找到绑定的 X 账号，本次未提交付款。请核对原账号后重新检查。"
 	case record != nil && record.SubmittedAt != 0:
@@ -770,6 +781,7 @@ func redeemMessage(record *checkout.Record, err error) string {
 func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 	var q struct {
 		Folder string `json:"folder"`
+		Tier   string `json:"tier"`
 		Months int    `json:"months"`
 		Count  int    `json:"count"`
 		Batch  string `json:"batch"`
@@ -778,8 +790,19 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q.Batch = strings.TrimSpace(q.Batch)
-	if (q.Months != 3 && q.Months != 6) || q.Count < 1 || q.Count > 2000 || len(q.Batch) > 120 || (q.Folder != "" && !folderIDPattern.MatchString(q.Folder)) {
-		message(w, 400, "请选择 3 或 6 个月，数量 1–2000，批次名称不超过 120 字节。")
+	tier, validTier := parseRequestTier(q.Tier)
+	if !validTier || q.Months < 1 || q.Months > 24 || q.Count < 1 || q.Count > 2000 || len(q.Batch) > 120 || (q.Folder != "" && !folderIDPattern.MatchString(q.Folder)) {
+		message(w, 400, "请选择已配置的套餐，数量 1–2000，批次名称不超过 120 字节。")
+		return
+	}
+	// Codes may only be issued for a tier and duration the catalog can fulfil.
+	cat, catErr := checkout.ReadCatalog(s.vault)
+	if catErr != nil {
+		message(w, 503, "套餐配置暂不可用，尚未生成兑换码。")
+		return
+	}
+	if _, catErr = cat.PlanFor(tier, q.Months); catErr != nil {
+		message(w, 400, "该套餐（"+checkout.GiftDescription(tier, q.Months)+"）未在商品目录中配置。")
 		return
 	}
 	if q.Batch == "" {
@@ -811,7 +834,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 			message(w, 503, "无法加密保存兑换码，尚未生成本批。")
 			return
 		}
-		_, e = tx.Exec("INSERT INTO codes(id,hash,hint,batch,months,status,created,updated,folder_id,copyable) VALUES(?,?,?,?,?,'active',?,?,?,1)", id, hash(code), code[len(code)-8:], q.Batch, q.Months, now, now, folder)
+		_, e = tx.Exec("INSERT INTO codes(id,hash,hint,batch,months,tier,status,created,updated,folder_id,copyable) VALUES(?,?,?,?,?,?,'active',?,?,?,1)", id, hash(code), code[len(code)-8:], q.Batch, q.Months, string(tier), now, now, folder)
 		if e != nil {
 			message(w, 503, "生成失败，没有保存本批兑换码。")
 			return
@@ -822,7 +845,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		message(w, 503, "保存结果不确定，请在后台核实批次后再操作。")
 		return
 	}
-	reply(w, 201, map[string]any{"codes": codes, "batch": q.Batch, "months": q.Months, "folder": folder})
+	reply(w, 201, map[string]any{"codes": codes, "batch": q.Batch, "months": q.Months, "tier": tier, "tier_label": tier.Label(), "folder": folder})
 }
 func (s *server) revoke(w http.ResponseWriter, r *http.Request) {
 	var q struct {

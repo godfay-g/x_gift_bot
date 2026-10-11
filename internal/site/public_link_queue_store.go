@@ -65,7 +65,13 @@ func (s *server) restorePublicLinkQueue() error {
 			continue
 		}
 		if j.State != "done" {
-			if _, err := cat.PlanFor(j.Request.Months); catalogErr == nil && err != nil {
+			// Tickets saved before Premium+ support carry no tier: they were Premium.
+			tier, ok := checkout.ParseTier(j.Request.Tier)
+			if !ok {
+				continue
+			}
+			j.Request.Tier = string(tier)
+			if _, err := cat.PlanFor(tier, j.Request.Months); catalogErr == nil && err != nil {
 				continue
 			}
 			// Give existing browsers a full reconnect grace period after downtime.

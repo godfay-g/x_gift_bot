@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 	"xgift/internal/vault"
 )
@@ -26,7 +25,7 @@ func inactiveCheckout(err error) bool {
 
 // PrepareRecoveryLinkForRecipient can create a checkout, but NEVER tokenizes or
 // confirms a card. Caller holds checkout.lock. Replacement is opt-in and audited.
-func PrepareRecoveryLinkForRecipient(ctx context.Context, v *vault.Vault, user, recipient string, port, months int, verifiedUnpaid bool) (*Record, error) {
+func PrepareRecoveryLinkForRecipient(ctx context.Context, v *vault.Vault, user, recipient string, port int, tier Tier, months int, verifiedUnpaid bool) (*Record, error) {
 	raw, err := v.Get("checkout:" + recipient)
 	if err != nil {
 		return nil, err
@@ -40,11 +39,11 @@ func PrepareRecoveryLinkForRecipient(ctx context.Context, v *vault.Vault, user, 
 	if err != nil {
 		return nil, err
 	}
-	plan, err := cat.PlanFor(months)
+	plan, err := cat.PlanFor(tier, months)
 	if err != nil {
 		return nil, err
 	}
-	if r.Username != user || r.RecipientID != recipient || r.Months != months || r.Amount != plan.Minor || r.Currency != strings.ToUpper(plan.Currency) || r.ProductID != plan.ProductID {
+	if r.Username != user || r.RecipientID != recipient || !r.matchesPlan(plan) {
 		return nil, errors.New("bound order identity or price mismatch")
 	}
 	if r.Status == "succeeded" {
@@ -54,7 +53,7 @@ func PrepareRecoveryLinkForRecipient(ctx context.Context, v *vault.Vault, user, 
 		return &r, errors.New("payment provider forbids retry with this card")
 	}
 	if r.Status == "creating" && unsubmitted(&r) {
-		return RunForRecipient(ctx, v, user, recipient, false, port, months)
+		return RunForRecipient(ctx, v, user, recipient, false, port, tier, months)
 	}
 	if !sessionURL(r.URL, r.SessionID) {
 		return &r, errors.New("untrusted original checkout")
@@ -222,7 +221,7 @@ func replaceRecoveryLink(ctx context.Context, v *vault.Vault, r *Record, s *stri
 	if err := gate.checkCreation(ctx, time.Now()); err != nil {
 		return r, err
 	}
-	next := Record{Username: r.Username, RecipientID: r.RecipientID, Months: r.Months, Amount: r.Amount, Currency: r.Currency, ProductID: r.ProductID, Status: "creating", Created: time.Now().Unix(), ReplacementCount: r.ReplacementCount + 1, PreviousSession: r.SessionID}
+	next := Record{Username: r.Username, RecipientID: r.RecipientID, Tier: r.Tier, Months: r.Months, Amount: r.Amount, Currency: r.Currency, ProductID: r.ProductID, Status: "creating", Created: time.Now().Unix(), ReplacementCount: r.ReplacementCount + 1, PreviousSession: r.SessionID}
 	fresh, err := json.Marshal(&next)
 	if err != nil {
 		return r, err
@@ -263,15 +262,15 @@ func replaceRecoveryLink(ctx context.Context, v *vault.Vault, r *Record, s *stri
 	return &next, holdPublicCheckout(v, &next, plan, time.Now())
 }
 
-func RecoverWithNewLink(ctx context.Context, v *vault.Vault, user, recipient string, port, months int, verifiedUnpaid, linksOnly bool) (*Record, error) {
-	r, err := PrepareRecoveryLinkForRecipient(ctx, v, user, recipient, port, months, verifiedUnpaid)
+func RecoverWithNewLink(ctx context.Context, v *vault.Vault, user, recipient string, port int, tier Tier, months int, verifiedUnpaid, linksOnly bool) (*Record, error) {
+	r, err := PrepareRecoveryLinkForRecipient(ctx, v, user, recipient, port, tier, months, verifiedUnpaid)
 	if err != nil || r == nil || r.Status == "succeeded" || linksOnly {
 		return r, err
 	}
 	if IsPaymentDeclined(r) {
-		return ManualRecoverForRecipient(ctx, v, user, recipient, port, months)
+		return ManualRecoverForRecipient(ctx, v, user, recipient, port, tier, months)
 	}
-	return ResumeForRecipient(ctx, v, user, recipient, port, months)
+	return ResumeForRecipient(ctx, v, user, recipient, port, tier, months)
 }
 
 func replacementMessage(err error) string {

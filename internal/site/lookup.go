@@ -22,7 +22,7 @@ func (s *server) lookup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var c codeRow
-	e := s.db.QueryRow("SELECT id,hint,batch,months,status,username,message,created,updated,progress,COALESCE(folder_id,''),copyable FROM codes WHERE hash=?", hash(q.Code)).Scan(&c.ID, &c.Hint, &c.Batch, &c.Months, &c.Status, &c.Username, &c.Message, &c.Created, &c.Updated, &c.Progress, &c.Folder, &c.Copyable)
+	e := s.db.QueryRow("SELECT id,hint,batch,months,tier,status,username,message,created,updated,progress,COALESCE(folder_id,''),copyable FROM codes WHERE hash=?", hash(q.Code)).Scan(&c.ID, &c.Hint, &c.Batch, &c.Months, &c.Tier, &c.Status, &c.Username, &c.Message, &c.Created, &c.Updated, &c.Progress, &c.Folder, &c.Copyable)
 	if errors.Is(e, sql.ErrNoRows) {
 		message(w, 404, "没有找到这个兑换码，请核对后重试。")
 		return

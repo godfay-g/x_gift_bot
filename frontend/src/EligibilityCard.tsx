@@ -92,7 +92,7 @@ export function EligibilityCard() {
         </Typography>
       </Stack>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        兑换前先确认 X 账号当前能否接收 Premium 赠送。检测不消耗兑换码。
+        兑换前先确认 X 账号当前能否接收 Premium / Premium+ 赠送。检测不消耗兑换码。
       </Typography>
       <Stack
         component="form"

@@ -32,8 +32,8 @@ type publicLinkRecord struct {
 // PublicLinkForUsername never uses a saved card or an automatic-payment record.
 // Caller must hold checkout.lock. The browser cookie identifies queue requests;
 // verified public links may be retrieved across browsers for the same recipient.
-func PublicLinkForUsername(ctx context.Context, v *vault.Vault, user, owner string, port, months int) (*Record, error) {
-	user, plan, x, err := publicSetup(v, user, owner, port, months)
+func PublicLinkForUsername(ctx context.Context, v *vault.Vault, user, owner string, port int, tier Tier, months int) (*Record, error) {
+	user, plan, x, err := publicSetup(v, user, owner, port, tier, months)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +42,7 @@ func PublicLinkForUsername(ctx context.Context, v *vault.Vault, user, owner stri
 }
 
 // publicSetup validates a public request and opens the X client for its plan.
-func publicSetup(v *vault.Vault, user, owner string, port, months int) (string, Plan, *xClient, error) {
+func publicSetup(v *vault.Vault, user, owner string, port int, tier Tier, months int) (string, Plan, *xClient, error) {
 	user, ok := NormalizeUsername(user)
 	if !ok || !ValidOwner(owner) {
 		return "", Plan{}, nil, errors.New("invalid public link request")
@@ -51,7 +51,7 @@ func publicSetup(v *vault.Vault, user, owner string, port, months int) (string, 
 	if err != nil {
 		return "", Plan{}, nil, err
 	}
-	plan, err := cat.PlanFor(months)
+	plan, err := cat.PlanFor(tier, months)
 	if err != nil {
 		return "", Plan{}, nil, err
 	}
@@ -80,7 +80,14 @@ func publicLinkForClient(ctx context.Context, v *vault.Vault, user, owner string
 	if existing != nil && existing.Status == "created" {
 		// Validate the old session against its original product, even when the
 		// visitor selected a different plan. Never return that link for a new plan.
-		oldPlan := Plan{Months: existing.Months, Minor: existing.Amount, Currency: strings.ToLower(existing.Currency), ProductID: existing.ProductID, Merchant: plan.Merchant}
+		// The catalog only contributes the merchant and, when the original
+		// product is still configured, its exact Stripe product name.
+		cat, catErr := ReadCatalog(v)
+		if catErr != nil {
+			return nil, catErr
+		}
+		oldPlan := cat.PlanForRecord(existing)
+		oldPlan.Merchant = plan.Merchant
 		err = verifyPublicCheckout(ctx, v, x, existing, oldPlan)
 		if err == nil && existing.Status == "succeeded" {
 			b, _ := json.Marshal(publicLinkRecord{Owner: ownerHash, Order: *existing})
@@ -120,7 +127,7 @@ func publicLinkForClient(ctx context.Context, v *vault.Vault, user, owner string
 	if err = x.quote(ctx, user, plan); err != nil {
 		return nil, err
 	}
-	r := Record{Username: user, RecipientID: recipient, Months: months, Amount: plan.Minor, Currency: strings.ToUpper(plan.Currency), ProductID: plan.ProductID, Status: "creating", Created: time.Now().Unix()}
+	r := Record{Username: user, RecipientID: recipient, Tier: plan.Tier, Months: months, Amount: plan.Minor, Currency: strings.ToUpper(plan.Currency), ProductID: plan.ProductID, Status: "creating", Created: time.Now().Unix()}
 	if existing != nil && !replace {
 		r = *existing
 	}
@@ -322,7 +329,7 @@ func publicLinkExisting(v *vault.Vault, user, recipient string, plan Plan) (*Rec
 	if r.Username != user || r.RecipientID != recipient || !unsubmitted(&r) || r.CardFingerprint != "" {
 		return nil, ErrPublicLinkConflict
 	}
-	if r.Months < 1 || r.Months > 24 || r.Amount <= 0 || !catalogCurrencyPattern.MatchString(strings.ToLower(r.Currency)) || !catalogProductPattern.MatchString(r.ProductID) {
+	if _, ok := ParseTier(string(r.Tier)); !ok || r.Months < 1 || r.Months > 24 || r.Amount <= 0 || !catalogCurrencyPattern.MatchString(strings.ToLower(r.Currency)) || !catalogProductPattern.MatchString(r.ProductID) {
 		return nil, ErrPublicLinkConflict
 	}
 	switch r.Status {
@@ -333,7 +340,7 @@ func publicLinkExisting(v *vault.Vault, user, recipient string, plan Plan) (*Rec
 	case "creating":
 		// An unpublished request has no payable session to verify. Keep its
 		// retry budget, but allow the current request to choose the product.
-		r.Months, r.Amount, r.Currency, r.ProductID = plan.Months, plan.Minor, strings.ToUpper(plan.Currency), plan.ProductID
+		r.Tier, r.Months, r.Amount, r.Currency, r.ProductID = plan.Tier, plan.Months, plan.Minor, strings.ToUpper(plan.Currency), plan.ProductID
 		if r.URL != "" || r.SessionID != "" || r.PreviousSession != "" || r.ReplacementCount != 0 || r.RecoveryAttempts != 0 || r.ManualRecovery || r.LastError != nil {
 			return nil, ErrPublicLinkConflict
 		}
@@ -344,7 +351,7 @@ func publicLinkExisting(v *vault.Vault, user, recipient string, plan Plan) (*Rec
 }
 
 func publicLinkMatches(r *Record, plan Plan) bool {
-	return r.Months == plan.Months && r.Amount == plan.Minor && r.Currency == strings.ToUpper(plan.Currency) && r.ProductID == plan.ProductID
+	return r.matchesPlan(plan)
 }
 
 func publicLinkFresh(r *Record, now time.Time) bool {
@@ -355,8 +362,8 @@ func publicLinkFresh(r *Record, now time.Time) bool {
 // TryCachedPublicLink is a non-creating bypass for the holder of the active
 // payment window. A cache miss must join the normal queue, never create here.
 // Caller holds checkout.lock across the entire operation.
-func TryCachedPublicLink(ctx context.Context, v *vault.Vault, user, owner string, port, months int) (*Record, bool, error) {
-	user, plan, x, err := publicSetup(v, user, owner, port, months)
+func TryCachedPublicLink(ctx context.Context, v *vault.Vault, user, owner string, port int, tier Tier, months int) (*Record, bool, error) {
+	user, plan, x, err := publicSetup(v, user, owner, port, tier, months)
 	if err != nil {
 		return nil, false, err
 	}

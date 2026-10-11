@@ -5,12 +5,15 @@ import (
 	"math"
 	"net/http"
 	"time"
+	"xgift/internal/checkout"
 )
 
 type statsMonthsRow struct {
-	Months    int `json:"months"`
-	Total     int `json:"total"`
-	Succeeded int `json:"succeeded"`
+	Tier      string `json:"tier"`
+	TierLabel string `json:"tier_label"`
+	Months    int    `json:"months"`
+	Total     int    `json:"total"`
+	Succeeded int    `json:"succeeded"`
 }
 
 type statsDailyRow struct {
@@ -74,18 +77,19 @@ func (s *server) stats(w http.ResponseWriter, r *http.Request) {
 	codes["redeemed"] = redeemed
 	codes["unfiled"] = unfiled
 	months := []statsMonthsRow{}
-	rows, err = tx.Query("SELECT months,COUNT(*),SUM(status='succeeded') FROM codes GROUP BY months ORDER BY months")
+	rows, err = tx.Query("SELECT tier,months,COUNT(*),SUM(status='succeeded') FROM codes GROUP BY tier,months ORDER BY tier,months")
 	if err != nil {
 		message(w, 503, "无法读取统计。")
 		return
 	}
 	for rows.Next() {
 		var m statsMonthsRow
-		if err = rows.Scan(&m.Months, &m.Total, &m.Succeeded); err != nil {
+		if err = rows.Scan(&m.Tier, &m.Months, &m.Total, &m.Succeeded); err != nil {
 			rows.Close()
 			message(w, 503, "无法读取统计。")
 			return
 		}
+		m.TierLabel = checkout.TierLabel(m.Tier)
 		months = append(months, m)
 	}
 	err = rows.Err()
